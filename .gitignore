@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project Specific
+nse_monitor/data/
+nse_monitor/downloads/
+nse_monitor/logs/
+*.log
+.vscode/
+.idea/
+*.db
