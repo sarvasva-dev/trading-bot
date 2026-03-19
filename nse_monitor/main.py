@@ -130,7 +130,9 @@ class MarketIntelligenceSystem:
             item["content_hash"] = content_hash
             db_id = self.db.add_news_item(item)
             item["db_id"] = db_id
-            ot new_items:
+            new_items.append(item)
+
+        if not new_items:
             # Still process user interactions (like /start) even if no news
             self.bot.handle_updates()
             logger.info(" No new unique items found.")
