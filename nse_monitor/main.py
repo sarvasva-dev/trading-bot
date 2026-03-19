@@ -87,9 +87,6 @@ class MarketIntelligenceSystem:
         logger.info("\n Starting Intelligence Cycle...")
         cycle_start = time.time()
         
-        # 0. Check for New Users / Commands first
-        self.bot.handle_updates()
-
         # 1. Fetch from all sources
         raw_items = []
         for source in self.sources:
