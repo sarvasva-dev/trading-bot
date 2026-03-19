@@ -3,36 +3,61 @@ from dotenv import load_dotenv
 
 # Storage Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+# Project Root (one level up from nse_monitor/)
+ROOT_DIR = os.path.dirname(BASE_DIR)
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 # NSE Constants
 NSE_BASE_URL = "https://www.nseindia.com"
 NSE_API_URL = f"{NSE_BASE_URL}/api/corporate-announcements"
 
 # Telegram Config
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+# Support multiple chat IDs (comma-separated)
+_chat_ids = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in _chat_ids.split(",") if cid.strip()]
 
-# LLM Config (xAI Grok)
-LLM_API_KEY = os.getenv("LLM_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL", "grok-4-latest")
-LLM_API_URL = "https://api.x.ai/v1/chat/completions"
+# Sarvam AI Config (Primary - Indian)
+SARVAM_API_KEY = "sk_m2lt55jk_LvxJ8hWcocMtUyDkDigLCLXs"
 
-# Gemini Config (Alternative)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Email Config (Notifier)
+_alert_emails = os.getenv("ALERT_EMAILS", "")
+ALERT_EMAILS = [e.strip() for e in _alert_emails.split(",") if e.strip()]
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 
 # Storage Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
-
 DB_PATH = os.path.join(DATA_DIR, "processed_announcements.db")
 
-# Headers for NSE
+# Modern User-Agents for Rotation
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1"
+]
+
+# Base Headers
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "X-Requested-With": "XMLHttpRequest"
 }
+
+# --- PRODUCTION ALERT CONTROLS ---
+# Minimum impact score (0-100) to trigger a Telegram alert
+# Set to 75 to filter out noise like ESOPs, routine filings
+ALERT_THRESHOLD = 75 
+
+# Maximum alerts to send per hour to avoid spamming/Telegram limits
+MAX_ALERTS_PER_HOUR = 5

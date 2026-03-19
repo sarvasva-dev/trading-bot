@@ -1,6 +1,12 @@
 requests
-pymupdf
+beautifulsoup4
+apscheduler
+pytz
+lxml
 python-dotenv
 google-generativeai
 google-genai
+PyMuPDF
+scikit-learn
+numpy
 pytest

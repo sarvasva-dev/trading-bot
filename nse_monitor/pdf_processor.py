@@ -1,8 +1,10 @@
 import os
 import requests
-import fitz  # PyMuPDF
 import logging
-from nse_monitor.config import DOWNLOADS_DIR, HEADERS
+import fitz  # PyMuPDF
+import random
+import time
+from nse_monitor.config import DOWNLOADS_DIR, HEADERS, USER_AGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -14,31 +16,76 @@ class PDFProcessor:
         self.session.headers.update(HEADERS)
         self.archive_base = "https://nsearchives.nseindia.com/corporate/"
 
-    def download_pdf(self, pdf_url):
-        """Downloads a PDF from NSE archives."""
-        try:
-            # Handle relative URLs
-            if not pdf_url.startswith("http"):
-                pdf_url = self.archive_base + pdf_url
-                
-            filename = os.path.basename(pdf_url)
-            local_path = os.path.join(DOWNLOADS_DIR, filename)
+    def download_pdf(self, pdf_url, retries=3):
+        """Downloads a PDF with retries and UA rotation to bypass blocks."""
+        if not pdf_url or pdf_url.strip() in ["", "-", "None"]:
+            return None
 
-            # Check if file already exists
-            if os.path.exists(local_path):
+        # Handle relative URLs
+        if not pdf_url.startswith("http"):
+            pdf_url = self.archive_base + pdf_url
+            
+        filename = os.path.basename(pdf_url)
+        local_path = os.path.join(DOWNLOADS_DIR, filename)
+
+        if os.path.exists(local_path):
+            return local_path
+
+        for attempt in range(retries):
+            try:
+                # Rotate User-Agent on each attempt
+                ua = random.choice(USER_AGENTS)
+                self.session.headers.update({"User-Agent": ua})
+                
+                logger.info(f"Downloading PDF (Attempt {attempt+1}/{retries}): {pdf_url}")
+                
+                # Use a fresh landing page visit to stabilize session if needed
+                # (NSE Archive sometimes likes 'referer' consistency)
+                response = self.session.get(pdf_url, timeout=45, stream=True)
+                response.raise_for_status()
+
+                with open(local_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                logger.info(f"Successfully downloaded: {filename}")
+                self._cleanup_downloads()
                 return local_path
 
-            logger.info(f"Downloading PDF: {pdf_url}")
-            response = self.session.get(pdf_url, timeout=30)
-            response.raise_for_status()
+            except Exception as e:
+                logger.warning(f"Download attempt {attempt+1} failed: {e}")
+                if attempt < retries - 1:
+                    wait_time = random.uniform(2, 5) * (attempt + 1)
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to download PDF after {retries} attempts: {pdf_url}")
 
-            with open(local_path, "wb") as f:
-                f.write(response.content)
+        return None
+        
+    def _cleanup_downloads(self, limit=20):
+        """Keeps only the latest N files in the downloads directory to save space."""
+        try:
+            # Get all files in download directory
+            files = [os.path.join(DOWNLOADS_DIR, f) for f in os.listdir(DOWNLOADS_DIR) 
+                     if os.path.isfile(os.path.join(DOWNLOADS_DIR, f))]
             
-            return local_path
+            if len(files) <= limit:
+                return
+
+            # Sort files by modification time (oldest first)
+            files.sort(key=os.path.getmtime)
+            
+            # Oldest files exceeding the limit
+            to_delete = files[:-limit]
+            
+            for f in to_delete:
+                try:
+                    os.remove(f)
+                    logger.info(f"Auto-cleanup: Purged old PDF {os.path.basename(f)}")
+                except Exception as e:
+                    logger.error(f"Failed to purge {f}: {e}")
         except Exception as e:
-            logger.error(f"Failed to download PDF {pdf_url}: {e}")
-            return None
+            logger.error(f"Cleanup process failed: {e}")
 
     def extract_text(self, pdf_path):
         """Extracts text from a local PDF file."""
@@ -48,6 +95,8 @@ class PDFProcessor:
         try:
             logger.info(f"Extracting text from {pdf_path}...")
             text = ""
+            # Absolute check to prevent NameError
+            import fitz 
             with fitz.open(pdf_path) as doc:
                 for page in doc:
                     text += page.get_text()

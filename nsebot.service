@@ -1,0 +1,15 @@
+[Unit]
+Description=NSE Corporate Announcements Monitor Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/path/to/nse2
+EnvironmentFile=/path/to/nse2/nse_monitor/.env
+ExecStart=/usr/bin/python3 -m nse_monitor.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

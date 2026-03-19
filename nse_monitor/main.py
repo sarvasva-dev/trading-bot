@@ -1,96 +1,304 @@
-import time
 import logging
 import sys
+import os
+import hashlib
+import time
+import difflib
+import schedule
+import warnings
 from datetime import datetime
-from nse_monitor.nse_api import NSEClient
-from nse_monitor.pdf_processor import PDFProcessor
-from nse_monitor.database import Database
-from nse_monitor.llm_processor import LLMProcessor
-from nse_monitor.telegram_bot import TelegramBot
+import pytz
 
+# Suppress warnings from HuggingFace/Transformers
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+from nse_monitor.config import LOGS_DIR
+from nse_monitor.database import Database
+from nse_monitor.clusterer import EventClusterer
+from nse_monitor.classifier import NewsClassifier
+from nse_monitor.report_builder import ReportBuilder
+from nse_monitor.telegram_bot import TelegramBot
+from nse_monitor.sources.nse_source import NSESource
+from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
+from nse_monitor.sources.economic_times_source import EconomicTimesSource
+from nse_monitor.pdf_processor import PDFProcessor
+from nse_monitor.llm_processor import LLMProcessor
+from nse_monitor.email_notifier import EmailNotifier
+try:
+    from nse_monitor.config import MAX_AI_PER_CYCLE, AI_COOLDOWN_SECONDS
+except ImportError:
+    MAX_AI_PER_CYCLE = 20
+    AI_COOLDOWN_SECONDS = 1
+
+# Force UTF-8 for console output on Windows
+try:
+    if sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, Exception):
+    pass
+
+# Set up logging early
+os.makedirs(LOGS_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("nse_monitor.log")
+        logging.FileHandler(os.path.join(LOGS_DIR, "app.log"), encoding="utf-8")
     ]
 )
-logger = logging.getLogger("NSEMonitor")
+logger = logging.getLogger("MarketIntelBot")
+
+class MarketIntelligenceSystem:
+    def __init__(self):
+        logger.info(" Market Intelligence Bot: Starting Services...")
+        self.db = Database()
+        self.bot = TelegramBot()
+        self.pdf_processor = PDFProcessor()
+        self.llm_processor = LLMProcessor()
+        self.email_notifier = EmailNotifier()
+        self.classifier = NewsClassifier()
+        self.clusterer = EventClusterer()
+        self.report_builder = ReportBuilder(self.bot, self.db)
+
+        # Initialize Sources
+        # Optimized Order as per User Request: News sources first, then Official Filing
+        self.sources = [
+            MoneycontrolSource(),
+            EconomicTimesSource(),
+            NSESource()
+        ]
+        
+    def is_market_hours(self):
+        tz = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(tz)
+        current_time = now.time()
+        # Market open 9:00 - 15:30
+        start = datetime.strptime("09:00", "%H:%M").time()
+        end = datetime.strptime("15:30", "%H:%M").time()
+        return start <= current_time <= end and now.weekday() < 5
+
+    def run_cycle(self):
+        """Main execution cycle running every 5 minutes."""
+        logger.info("\n Starting Intelligence Cycle...")
+        cycle_start = time.time()
+        
+        # 1. Fetch from all sources
+        raw_items = []
+        for source in self.sources:
+            try:
+                logger.info(f" Fetching from {source.NAME}...")
+                
+                # Handling different method names across sources for compatibility
+                if hasattr(source, 'fetch_news'):
+                    items = source.fetch_news()
+                elif hasattr(source, 'fetch'):
+                    items = source.fetch()
+                elif hasattr(source, 'get_announcements'):
+                    items = source.get_announcements()
+                else:
+                    logger.error(f"Source {source.NAME} has no valid fetch method")
+                    continue
+                    
+                if items:
+                    raw_items.extend(items)
+                time.sleep(3) # Polite delay
+            except Exception as e:
+                logger.error(f"Source Error ({source.NAME}): {e}")
+
+        # 2. Filter & Register New Items
+        new_items = []
+        for item in raw_items:
+            # Generate ID based on Content
+            content_hash = hashlib.sha256(
+                f"{item['headline']}{item['summary']}".encode()
+            ).hexdigest()
+
+            # Skip duplicates (Robust Check)
+            if self.db.is_url_duplicate(item.get("url")) or \
+               self.db.is_content_duplicate(item.get("headline"), content_hash):
+                continue
+
+            # Add to Database Immediately
+            item["content_hash"] = content_hash
+            db_id = self.db.add_news_item(item)
+            item["db_id"] = db_id
+            new_items.append(item)
+
+        if not new_items:
+            logger.info(" No new unique items found.")
+            return False
+
+        logger.info(f" Found {len(new_items)} new unique items. Preparing for Analysis...")
+
+        # 3. SMART GROUPING LOGIC (Single Event Method)
+        # Groups multiple sources for the same event into one "Event Packet"
+        
+        events_to_process = []
+        unprocessed_pool = new_items[:] # Copy of list
+        matcher = difflib.SequenceMatcher(None, "", "")
+
+        while unprocessed_pool:
+            # Take the first item as the "Base" of a new event group
+            base_item = unprocessed_pool.pop(0)
+            current_event_group = [base_item]
+            
+            # Search pool for related items (duplicates or cross-source matches)
+            indices_to_remove = []
+            
+            for i, candidate in enumerate(unprocessed_pool):
+                # Check A: Exact specific URL match (rare but possible)
+                if candidate.get("url") and candidate["url"] == base_item.get("url"):
+                    current_event_group.append(candidate)
+                    indices_to_remove.append(i)
+                    continue
+
+                # Check B: Headline Similarity (Fuzzy Match > 60%)
+                matcher.set_seq2(base_item["headline"].lower())
+                matcher.set_seq1(candidate["headline"].lower())
+                similarity = matcher.ratio()
+                
+                if similarity > 0.60:
+                    current_event_group.append(candidate)
+                    indices_to_remove.append(i)
+            
+            # Remove grouped items from pool (reverse order to keep indices valid)
+            for i in sorted(indices_to_remove, reverse=True):
+                del unprocessed_pool[i]
+            
+            events_to_process.append(current_event_group)
+
+        # 4. Process Each Event Group
+        logger.info(f" Grouped {len(new_items)} items into {len(events_to_process)} unique events.")
+        
+        alert_sent_this_cycle = False
+        market_on = self.is_market_hours()
+        recent_news = self.db.get_recent_news(hours=24) # Fetch once for context
+
+        for event_group in events_to_process:
+            # Pre-processing: PDF Extraction for NSE items in the group
+            for item in event_group:
+                if item["source"] == "NSE" and item.get("url"):
+                    logger.info(f" Extracting PDF for: {item['headline'][:40]}...")
+                    pdf_path = self.pdf_processor.download_pdf(item["url"])
+                    raw_text = self.pdf_processor.extract_text(pdf_path)
+                    if raw_text:
+                        item["summary"] += f"\n[INTERNAL FILING TEXT]: {raw_text[:5000]}"
+                        self.db.update_news_summary(item["db_id"], item["summary"])
+            
+            # Call AI for Single Event Analysis
+            logger.info(f" Analyzing Event: {event_group[0]['headline'][:60]} ({len(event_group)} sources)")
+            
+            # === THE NEW SINGLE EVENT CALL ===
+            analysis = self.llm_processor.analyze_single_event(event_group, recent_news=recent_news)
+            
+            if not analysis or not analysis.get("valid_event", False):
+                logger.info(" AI Rejected Event (Low relevance/Old/Opinion)")
+                continue
+
+            # Update Database for ALL items in this group with the SAME analysis result
+            impact_score = analysis.get("impact_score", 0)
+            prob = analysis.get("probability", 0)
+            quality = analysis.get("trade_quality", "AVOID")
+            
+            lead_item = event_group[0] # Default lead
+            
+            # Find best lead item (prefer NSE if available)
+            for item in event_group:
+                if item["source"] == "NSE":
+                    lead_item = item
+                    break
+
+            for item in event_group:
+                self.db.update_news_analysis(
+                    news_id=item["db_id"],
+                    embedding=None,
+                    cluster_id=None, # Pending proper clustering integration if needed
+                    perspective=analysis.get("expected_move", "Neutral"),
+                    impact_score=impact_score,
+                    sentiment=analysis.get("sentiment", "Neutral"),
+                    probability=prob,
+                    quality=quality
+                )
+
+            # ALERT LOGIC
+            logger.info(f" AI Result: Impact {impact_score}/10 | Prob {prob}% | {quality}")
+            
+            # Allow alerts for POSSIBLE MOVE (50%+) and up, REJECT 'AVOID'
+            # SPECIAL RULE: Moneycontrol/ET often have "Market News" with lower specific impact but high relevance
+            is_news_source = any(s in ["Moneycontrol", "Economic Times"] for s in [i["source"] for i in event_group])
+            
+            should_alert = False
+            if (impact_score >= 6 or prob >= 50) and "AVOID" not in quality:
+                should_alert = True
+            elif is_news_source and (impact_score >= 4 or prob >= 40):
+                # Lower threshold for News Sources to catch specialized reports
+                should_alert = True
+
+            if should_alert:
+                sources_names = list(set([i["source"] for i in event_group]))
+                alert_data = {
+                    "symbol": analysis.get("symbol", "MARKET"),
+                    "source": " & ".join(sources_names), # "NSE & MoneyControl"
+                    "desc": analysis.get("headline"),
+                    "url": lead_item["url"],
+                    "impact_score": impact_score,
+                    "probability": prob,
+                    "trade_quality": quality,
+                    "sentiment": analysis.get("sentiment", "Neutral"),
+                    "ai_report": {
+                        "headline": analysis.get("headline"),
+                        "summary": analysis.get("summary"),
+                        "key_insight": analysis.get("key_insight"),
+                        "impact": analysis.get("sentiment"), # Map sentiment to impact field for display
+                        "quantum": "High", # Simplified
+                        "duration": "Intraday",
+                        "sentiment": analysis.get("sentiment"),
+                        "expected_move": analysis.get("expected_move")
+                    }
+                }
+                
+                if self.bot.send_alert(alert_data):
+                    self.db.mark_alert_sent(lead_item["db_id"])
+                    alert_sent_this_cycle = True
+            else:
+                logger.info(f" Skipped Alert ({lead_item['source']}): Impact {impact_score} Prob {prob}% Quality {quality}")
+            
+            # Polite delay between AI calls
+            time.sleep(20)
+
+        logger.info(f" Cycle Complete. Analyzed {len(events_to_process)} events.")
+        return alert_sent_this_cycle
 
 def main():
-    logger.info("Initializing NSE Monitor System...")
-    
     try:
-        nse = NSEClient()
-        pdf = PDFProcessor()
-        db = Database()
-        llm = LLMProcessor()
-        bot = TelegramBot()
+        system = MarketIntelligenceSystem()
+        
+        # Initial Boot Check
+        system.run_cycle()
+        
+        # Schedule Loop
+        import schedule
+        schedule.every(5).minutes.do(system.run_cycle)
+        
+        # Background: Morning Report
+        schedule.every().day.at("08:30").do(system.report_builder.generate_morning_report)
+
+        logger.info(" Entering Main Loop...")
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        logger.info(" Logic Stopped by User.")
     except Exception as e:
-        logger.error(f"Critical error during initialization: {e}")
-        sys.exit(1)
-
-    logger.info("Monitor started. Checking every 60 seconds.")
-    
-    while True:
-        try:
-            logger.info("Starting a new check cycle...")
-            announcements = nse.get_announcements()
-            
-            if not announcements:
-                logger.info("No announcements found or request failed.")
-            else:
-                for ann in sorted(announcements, key=lambda x: x.get('dt', '')):
-                    # Use a stable unique ID
-                    # Some announcements might have sm_pid, others id
-                    raw_id = str(ann.get('sm_pid') or ann.get('id') or f"{ann.get('symbol')}-{ann.get('dt')}-{ann.get('desc', '')[:20]}")
-                    
-                    if not db.is_processed(raw_id):
-                        company = ann.get('symbol') or ann.get('sm_name', 'Unknown')
-                        desc = ann.get('desc') or ann.get('subject', 'No description')
-                        pdf_url = ann.get('attchmntFile') or ann.get('attachmentUrl')
-
-                        logger.info(f"New announcement detected for {company}: {desc[:50]}...")
-                        
-                        pdf_path = None
-                        extracted_text = ""
-                        if pdf_url:
-                            pdf_path = pdf.download_pdf(pdf_url)
-                            extracted_text = pdf.extract_text(pdf_path)
-
-                        # Process with LLM
-                        context = f"Headline: {desc}\n\nPDF Content:\n{extracted_text[:4000]}"
-                        ai_report = llm.analyze_news(company, context)
-                        
-                        # Prepare Telegram Data
-                        alert_data = {
-                            "symbol": company,
-                            "desc": desc,
-                            "pdf_url": pdf_url,
-                            "ai_report": ai_report
-                        }
-                        
-                        # Send Notification
-                        bot.send_alert(alert_data)
-                        
-                        # Mark as processed
-                        # Extracting a timestamp for the DB
-                        ann_dt = ann.get('dt') or ann.get('annDate') or datetime.now().strftime("%Y-%m-%d")
-                        db.mark_processed(raw_id, company, ann_dt)
-                        
-                        # Anti-spam delay between processing
-                        time.sleep(2)
-                    
-            logger.info("Cycle complete. Waiting 60 seconds...")
-            time.sleep(60)
-            
-        except KeyboardInterrupt:
-            logger.info("Stopping monitor...")
-            break
-        except Exception as e:
-            logger.error(f"Unexpected error in main loop: {e}")
-            time.sleep(10)
+        logger.critical(f" Critical Failure: {e}", exc_info=True)
+        # Optional: Email Alert on Crash
+        # system.email_notifier.send_failure_alert(str(e))
 
 if __name__ == "__main__":
     main()
+
