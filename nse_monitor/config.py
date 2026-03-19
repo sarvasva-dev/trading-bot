@@ -64,3 +64,11 @@ ALERT_THRESHOLD = 75
 
 # Maximum alerts to send per hour to avoid spamming/Telegram limits
 MAX_ALERTS_PER_HOUR = 5
+
+# --- SYSTEM SETTINGS ---
+# Disable the scheduler for debugging/testing
+DISABLE_SCHEDULER = False
+
+# Maximum items to send to AI in one cycle (Rate Limiting)
+MAX_AI_PER_CYCLE = 20
+AI_COOLDOWN_SECONDS = 1
