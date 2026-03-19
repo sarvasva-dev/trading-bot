@@ -52,13 +52,19 @@ class TelegramBot:
                     self.last_update_id = update["update_id"]
                     if "message" in update:
                         chat_id = update["message"]["chat"]["id"]
+                        text = update["message"].get("text", "").strip()
                         first_name = update["message"]["from"].get("first_name", "User")
                         
-                        # Only send welcome text and save if it is a completely new user
+                        # Register new users dynamically
+                        is_new_user = False
                         if chat_id not in self.chat_ids:
                             self.chat_ids.append(chat_id)
                             self._save_dynamic_ids()
+                            is_new_user = True
+                            logger.info(f"Dynamically registered new user: {first_name} ({chat_id})")
                             
+                        # Response Logic: Welcome on New User OR Explicit /start command
+                        if is_new_user or text == "/start":
                             # Send Welcome Message
                             welcome_text = (
                                 f" 🛰️ <b>{BOT_NAME} Activated</b>\n\n"
@@ -72,7 +78,6 @@ class TelegramBot:
                                 f"🧠 <b>AI Analysis:</b> Every event is cross-verified for impact."
                             )
                             self._send_raw(chat_id, welcome_text)
-                            logger.info(f"Dynamically registered new user: {first_name} ({chat_id})")
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")

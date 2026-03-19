@@ -87,6 +87,9 @@ class MarketIntelligenceSystem:
         logger.info("\n Starting Intelligence Cycle...")
         cycle_start = time.time()
         
+        # 0. Check for New Users / Commands first
+        self.bot.handle_updates()
+
         # 1. Fetch from all sources
         raw_items = []
         for source in self.sources:
@@ -127,9 +130,7 @@ class MarketIntelligenceSystem:
             item["content_hash"] = content_hash
             db_id = self.db.add_news_item(item)
             item["db_id"] = db_id
-            new_items.append(item)
-
-        if not new_items:
+            ot new_items:
             # Still process user interactions (like /start) even if no news
             self.bot.handle_updates()
             logger.info(" No new unique items found.")
