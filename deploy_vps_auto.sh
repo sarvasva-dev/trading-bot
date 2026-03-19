@@ -16,18 +16,26 @@ sudo apt install -y python3-pip python3-venv git curl
 
 # 2. CLONE REPO
 echo "[2/6] Setting up Repository..."
-REPO_DIR="$HOME/nse_bot"
-GIT_URL="https://github.com/sarvast/trading-bot.git"
 
-if [ -d "$REPO_DIR" ]; then
-    echo "Existing directory found. Pulling latest code..."
-    cd "$REPO_DIR"
-    git reset --hard origin/main
-    git pull
+# Detect if we are already inside the cloned repo
+if [ -d ".git" ] && [ -f "deploy_vps_auto.sh" ]; then
+    echo "✅ Running from inside the repository."
+    REPO_DIR=$(pwd)
 else
-    echo "Cloning from $GIT_URL..."
-    git clone "$GIT_URL" "$REPO_DIR"
-    cd "$REPO_DIR"
+    # Default path for curl-based install
+    REPO_DIR="$HOME/nse_bot"
+    GIT_URL="https://github.com/sarvast/trading-bot.git"
+
+    if [ -d "$REPO_DIR" ]; then
+        echo "Existing directory found. Pulling latest code..."
+        cd "$REPO_DIR"
+        git reset --hard origin/main
+        git pull
+    else
+        echo "Cloning from $GIT_URL..."
+        git clone "$GIT_URL" "$REPO_DIR"
+        cd "$REPO_DIR"
+    fi
 fi
 
 # 3. PYTHON VIRTUAL ENVIRONMENT
