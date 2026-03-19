@@ -249,7 +249,7 @@ class Database:
         """Fetches recent news items for AI deduplication."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT headline, summary FROM news_items WHERE created_at > datetime('now', ?)",
+            "SELECT id, headline, summary FROM news_items WHERE created_at > datetime('now', ?)",
             (f"-{hours} hours",)
         )
-        return [{"headline": row[0], "summary": row[1]} for row in cursor.fetchall()]
+        return [{"id": row[0], "headline": row[1], "summary": row[2]} for row in cursor.fetchall()]

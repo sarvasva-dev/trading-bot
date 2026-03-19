@@ -3,13 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
-.env
+# .env  <-- Un-ignored as per user request to include keys
 
 # Project Specific
-nse_monitor/data/
+# nse_monitor/data/ <-- Un-ignored
 nse_monitor/downloads/
 nse_monitor/logs/
 *.log
 .vscode/
 .idea/
-*.db
+# *.db <-- Un-ignored

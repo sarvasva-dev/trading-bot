@@ -39,7 +39,7 @@ class LLMProcessor:
         else:
             logger.error("SARVAM_API_KEY is missing in config.py")
 
-    def analyze_single_event(self, event_items, recent_news=None):
+    def analyze_single_event(self, event_items, recent_news=None, market_status="CLOSED"):
         """
         Analyzes a single event grouping (1-3 related news items).
         Performs merging, comparison, and intraday probability calculation.
@@ -53,6 +53,9 @@ class LLMProcessor:
 
         # Prepare context
         current_time_str = time.strftime("%H:%M")
+        market_context_str = "MARKET IS OPEN - SPEED & ACCURACY CRITICAL" if market_status == "OPEN" else "POST-MARKET ANALYSIS"
+
+        # Prepare news content string
         
         # Prepare news content string
         news_content_str = ""
@@ -77,7 +80,7 @@ You are a Lead Quantitative & Macro Strategist specialized in the Indian Equity 
 Task: Analyze this group of news reports representing a SINGLE EVENT.
 
 CONTEXT:
-Mode: LIVE MARKET TESTING
+Mode: {market_context_str}
 Time: {current_time_str}
 Sources Available: {", ".join(sources_unique)}
 Multi-Source Cross-Check: {multi_source_flag}
@@ -88,7 +91,7 @@ NEWS REPORTS:
 ==================================================
 STEP 1: MERGE & EXCLUDE
 1. Fuse insights into one "Master Narrative".
-2. EXCLUSIONS:
+2. EXCLUSIONS (CRITICAL):
    - REJECT if "Opinion" / "Market Commentary".
    - REJECT if older than 24h.
 

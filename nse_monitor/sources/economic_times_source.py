@@ -59,12 +59,23 @@ class EconomicTimesSource:
                 # Fetch deeper context for AI
                 full_text = self._fetch_full_article(link, headers)
 
+                # Try to extract timestamp from the list item
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    time_tag = item.find('time')
+                    if time_tag and time_tag.has_attr('data-time'):
+                         # ET often uses unix timestamp in data-time
+                         unix_time = float(time_tag['data-time'])
+                         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(unix_time))
+                except Exception:
+                    pass
+
                 results.append({
                     "source": "Economic Times",
                     "headline": headline,
                     "summary": full_text or headline,
                     "url": link,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": timestamp
                 })
             
             logger.info(f"Fetched {len(results)} items from Economic Times (Latest and Deep).")

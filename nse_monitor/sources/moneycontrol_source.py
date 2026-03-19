@@ -46,13 +46,27 @@ class MoneycontrolSource:
                     
                 # Scrape full article content for rich AI sentiment analysis
                 full_text = self._fetch_full_article(link, headers)
-                
+
+                # Try to find date in the article
+                article_date = time.strftime("%Y-%m-%d %H:%M:%S") # Default to now
+                try:
+                    date_span = item.find('span', class_='gary-txt')
+                    if date_span:
+                        # Format example: 'March 19, 2024 09:30 AM IST'
+                        raw_date = date_span.text.strip()
+                        # Simple parsing or keeping as string for now if consistent
+                        # For robustness, we'll stick to now() if parsing fails, but 
+                        # future improvement can parse 'raw_date'
+                        pass 
+                except:
+                    pass
+
                 results.append({
                     "source": "Moneycontrol",
                     "headline": headline,
                     "summary": full_text or headline,
                     "url": link,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": article_date # Using publication time if possible
                 })
             
             logger.info(f"Fetched {len(results)} items from Moneycontrol (Latest and Deep).")

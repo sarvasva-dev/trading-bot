@@ -179,6 +179,30 @@ class MarketIntelligenceSystem:
         recent_news = self.db.get_recent_news(hours=24) # Fetch once for context
 
         for event_group in events_to_process:
+            # === DEDUPLICATION CHECK (DB BASED) ===
+            # Avoid sending the same event twice even if headlines differ slightly
+            current_headline = event_group[0]["headline"]
+            current_ids = [item["db_id"] for item in event_group]
+            is_semantic_duplicate = False
+            
+            if recent_news:
+                for old_item in recent_news:
+                    # SELF-CHECK PREVENTION: Do not compare against itself!
+                    if old_item["id"] in current_ids:
+                        continue
+
+                    # Fuzzy Match Ratio
+                    # Check both headline and summary for stronger match context
+                    similarity_head = difflib.SequenceMatcher(None, current_headline.lower(), old_item["headline"].lower()).ratio()
+                    
+                    if similarity_head > 0.60:
+                        logger.info(f" ♻️ Skipped Semantic Duplicate: '{current_headline}' matches existing '{old_item['headline']}' ({int(similarity_head*100)}%)")
+                        is_semantic_duplicate = True
+                        break
+            
+            if is_semantic_duplicate:
+                continue
+            
             # Pre-processing: PDF Extraction for NSE items in the group
             for item in event_group:
                 if item["source"] == "NSE" and item.get("url"):
@@ -193,7 +217,9 @@ class MarketIntelligenceSystem:
             logger.info(f" Analyzing Event: {event_group[0]['headline'][:60]} ({len(event_group)} sources)")
             
             # === THE NEW SINGLE EVENT CALL ===
-            analysis = self.llm_processor.analyze_single_event(event_group, recent_news=recent_news)
+            market_status_str = "OPEN" if market_on else "CLOSED"
+            # Removed recent_news passing to save tokens since we do DB pre-check now
+            analysis = self.llm_processor.analyze_single_event(event_group, market_status=market_status_str)
             
             if not analysis or not analysis.get("valid_event", False):
                 logger.info(" AI Rejected Event (Low relevance/Old/Opinion)")
@@ -237,6 +263,11 @@ class MarketIntelligenceSystem:
             elif is_news_source and (impact_score >= 4 or prob >= 40):
                 # Lower threshold for News Sources to catch specialized reports
                 should_alert = True
+
+            # --- STRICT MARKET HOURS ENFORCEMENT ---
+            if not market_on:
+                should_alert = False
+                logger.debug(" Market Closed. Alert suppressed (Saved for Morning Report).")
 
             if should_alert:
                 sources_names = list(set([i["source"] for i in event_group]))
@@ -284,11 +315,15 @@ def main():
         import schedule
         schedule.every(5).minutes.do(system.run_cycle)
         
-        # Background: Morning Report
-        schedule.every().day.at("08:30").do(system.report_builder.generate_morning_report)
+        # Background: Morning Report (Now at 09:00 AM as per new strategy)
+        schedule.every().day.at("09:00").do(system.report_builder.generate_morning_report)
 
         logger.info(" Entering Main Loop...")
         while True:
+            # Check for new Telegram users/messages periodically
+            # This ensures auto-registration of new users without restarting
+            system.bot.handle_updates()
+            
             schedule.run_pending()
             time.sleep(1)
 

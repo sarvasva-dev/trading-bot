@@ -61,16 +61,28 @@ class TelegramBot:
                             
                             # Send Welcome Message
                             welcome_text = (
-                                f" <b>Welcome to Market Intelligence Bot v7.5, {first_name}!</b>\n\n"
+                                f" <b>Welcome to Trading News Bot, {first_name}!</b>\n\n"
                                 f"I am now tracking high-impact market events for you 24/7.\n\n"
                                 f" <b>Real-time Alerts:</b> Enabled\n"
-                                f" <b>Pre-Market Reports:</b> 08:30 IST\n"
+                                f" <b>Pre-Market Reports:</b> 09:00 IST\n"
                                 f" <b>AI Analysis:</b> Strict Filters Applied"
                             )
                             self._send_raw(chat_id, welcome_text)
                             logger.info(f"Dynamically registered new user: {first_name} ({chat_id})")
+
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
+
+    def check_user_subscription(self, chat_id):
+        """
+        [PAYMENT PLACEHOLDER]
+        Checks if the user has an active subscription.
+        Currently returns True (Free Tier).
+        Integration Point: Connect this to Razorpay/Stripe database checks.
+        """
+        # TODO: Implement database lookup for user payment status
+        # return self.db.is_premium_user(chat_id)
+        return True 
 
     def _send_raw(self, chat_id, text):
         """Internal helper for sending basic text messages."""
