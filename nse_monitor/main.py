@@ -13,9 +13,8 @@ import pytz
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from nse_monitor.config import LOGS_DIR
+from nse_monitor.config import LOGS_DIR, ALERT_THRESHOLD, MAX_ALERTS_PER_HOUR, BOT_NAME
 from nse_monitor.database import Database
-from nse_monitor.clusterer import EventClusterer
 from nse_monitor.classifier import NewsClassifier
 from nse_monitor.report_builder import ReportBuilder
 from nse_monitor.telegram_bot import TelegramBot
@@ -61,8 +60,8 @@ class MarketIntelligenceSystem:
         self.llm_processor = LLMProcessor()
         self.email_notifier = EmailNotifier()
         self.classifier = NewsClassifier()
-        self.clusterer = EventClusterer()
-        self.report_builder = ReportBuilder(self.bot, self.db)
+        # Removed EventClusterer to save ~400MB RAM for 1GB VPS
+        self.report_builder = ReportBuilder(self.bot, self.db, self.llm_processor)
 
         # Initialize Sources
         # Optimized Order as per User Request: News sources first, then Official Filing
@@ -76,7 +75,9 @@ class MarketIntelligenceSystem:
         tz = pytz.timezone("Asia/Kolkata")
         now = datetime.now(tz)
         current_time = now.time()
-        # Market open 9:00 - 15:30
+        # Market sessions (IST):
+        # 09:00 - 09:08 (Pre-open)
+        # 09:15 - 15:30 (Normal)
         start = datetime.strptime("09:00", "%H:%M").time()
         end = datetime.strptime("15:30", "%H:%M").time()
         return start <= current_time <= end and now.weekday() < 5
@@ -129,6 +130,8 @@ class MarketIntelligenceSystem:
             new_items.append(item)
 
         if not new_items:
+            # Still process user interactions (like /start) even if no news
+            self.bot.handle_updates()
             logger.info(" No new unique items found.")
             return False
 
@@ -269,6 +272,13 @@ class MarketIntelligenceSystem:
                 should_alert = False
                 logger.debug(" Market Closed. Alert suppressed (Saved for Morning Report).")
 
+            # --- SPAM PROTECTION: HOURLY LIMIT ---
+            if should_alert:
+                sent_this_hour = self.db.get_alert_count_last_hour()
+                if sent_this_hour >= MAX_ALERTS_PER_HOUR:
+                    should_alert = False
+                    logger.warning(f" ⚠️ Spam Protection: Limit reached ({sent_this_hour}/{MAX_ALERTS_PER_HOUR}). Skipping alert.")
+
             if should_alert:
                 sources_names = list(set([i["source"] for i in event_group]))
                 alert_data = {
@@ -307,25 +317,14 @@ class MarketIntelligenceSystem:
 def main():
     try:
         system = MarketIntelligenceSystem()
+        from nse_monitor.scheduler import MarketScheduler
+        scheduler = MarketScheduler(system)
         
         # Initial Boot Check
         system.run_cycle()
         
-        # Schedule Loop
-        import schedule
-        schedule.every(5).minutes.do(system.run_cycle)
-        
-        # Background: Morning Report (Now at 09:00 AM as per new strategy)
-        schedule.every().day.at("09:00").do(system.report_builder.generate_morning_report)
-
-        logger.info(" Entering Main Loop...")
-        while True:
-            # Check for new Telegram users/messages periodically
-            # This ensures auto-registration of new users without restarting
-            system.bot.handle_updates()
-            
-            schedule.run_pending()
-            time.sleep(1)
+        logger.info(" Entering Main Loop (timezone-aware)...")
+        scheduler.start()
 
     except KeyboardInterrupt:
         logger.info(" Logic Stopped by User.")
