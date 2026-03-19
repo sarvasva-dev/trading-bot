@@ -14,16 +14,18 @@ echo "[1/6] Updating System Packages..."
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-venv git curl
 
-# 2. CLONE REPO (Prompt for URL if not hardcoded)
+# 2. CLONE REPO
 echo "[2/6] Setting up Repository..."
 REPO_DIR="$HOME/nse_bot"
+GIT_URL="https://github.com/sarvast/trading-bot.git"
+
 if [ -d "$REPO_DIR" ]; then
     echo "Existing directory found. Pulling latest code..."
     cd "$REPO_DIR"
+    git reset --hard origin/main
     git pull
 else
-    # REPLACE THIS URL WITH YOUR NEW REPO URL
-    read -p "Enter your GIT REPO URL: " GIT_URL
+    echo "Cloning from $GIT_URL..."
     git clone "$GIT_URL" "$REPO_DIR"
     cd "$REPO_DIR"
 fi

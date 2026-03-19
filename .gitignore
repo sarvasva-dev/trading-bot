@@ -13,3 +13,6 @@ nse_monitor/logs/
 .vscode/
 .idea/
 # *.db <-- Un-ignored
+*.db-wal
+*.db-shm
+
