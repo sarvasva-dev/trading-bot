@@ -1,5 +1,5 @@
 @echo off
-echo --- NSE Monitor Git Push Helper ---
+echo --- Market Pulse Git Push Helper ---
 echo.
 
 :: 1. Initialize Git if not exists
@@ -11,7 +11,7 @@ if not exist .git (
 :: 2. Set Local Config (Does not affect your global settings)
 echo Configuring local user...
 git config user.email "trader@example.com"
-git config user.name "Market Trader"
+git config user.name "Market Pulse"
 
 :: 3. Prepare Files
 echo Staging files...
@@ -19,7 +19,7 @@ git add .
 
 :: 4. Commit
 echo Creating commit...
-git commit -m "Initialize project: AI-powered NSE Monitor with Gemini-3 Flash Intelligence"
+git commit -m "Initialize Market Pulse v1.0: AI-powered Intelligence Engine"
 
 :: 5. Set Branch to main
 echo Setting branch to main...

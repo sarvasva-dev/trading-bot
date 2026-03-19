@@ -1,6 +1,6 @@
 @echo off
 echo =========================================================
-echo    Market Intelligence Bot V7.5 - Production Deploy
+echo    Market Pulse v1.0 - Production Deploy
 echo =========================================================
 echo.
 
@@ -32,12 +32,12 @@ IF NOT EXIST .env (
 
 echo.
 echo =========================================================
-echo SUCCESS! Starting the Market Intelligence Bot...
+echo SUCCESS! Starting Market Pulse...
 echo =========================================================
 echo Note: This window will stay open to show output if run directly.
 echo To run entirely hidden, schedule this batch file via Task Scheduler.
 echo.
 
-title Market Intelligence Bot v7.5
-python -m nse_monitor.main
+title Market Pulse v1.0
+python v7_launcher.py
 pause

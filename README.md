@@ -1,14 +1,15 @@
-# Market Intelligence Bot v7.0 (Event-Driven)
+# Market Pulse v1.0 (Market Intelligence Engine)
 
-Sophisticated Indian market intelligence engine with semantic event clustering, hybrid impact scoring, and automated reporting.
+Sophisticated Indian market intelligence engine with AI synthesis, hybrid impact scoring, and automated reporting.
 
-## 🚀 v7.0 Features
-- **Semantic Clustering**: Groups related news using `all-MiniLM-L6-v2`.
-- **Hybrid Impact Scoring**: AI analysis + Rule-based logic (RBI, Interest Rates, War, M&A).
-- **Alert Policy**: Smart high-impact alerts (>=85 market hours, >=90 after).
-- **Rate Limiting**: Maximum 3 alerts per hour to prevent noise.
-- **Pre-Market Reports**: Consolidated intelligence reports every morning at 08:30 IST.
-- **Weekday Focus**: Automatic weekend suspension.
+## 🚀 v1.0 Features (Optimized)
+- **Pulse Synthesis**: New Executive summaries for morning reports.
+- **RAM Balanced**: Optimized for 1GB VPS (Low memory footprint).
+- **Multi-Source**: Tracks NSE announcements, MoneyControl, and Economic Times.
+- **Hybrid Impact Scoring**: AI analysis + Rule-based logic.
+- **Rate Limiting**: Maximum 5 alerts per hour (Spam Protection).
+- **IST Precision**: Consolidated reports at 08:30 IST.
+- **Weekday Focus**: Automatic weekend suppression for alerts.
 
 ## 🛠️ Linux VPS Deployment (Ubuntu/Debian)
 
@@ -45,7 +46,7 @@ sudo nano /etc/systemd/system/nsebot.service
 Paste this:
 ```ini
 [Unit]
-Description=Market Intelligence Bot v7.0
+Description=Market Pulse Intelligence Bot v1.0
 After=network.target
 
 [Service]

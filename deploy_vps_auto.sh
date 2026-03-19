@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # =================================================================
-#  MARKET INTELLIGENCE BOT v7.5 - ONE-CLICK VPS INSTALLER (Ubuntu)
+#  MARKET PULSE v1.0 - ONE-CLICK VPS INSTALLER (Ubuntu)
 # =================================================================
 
 set -e  # Exit strictly on error
 
-echo "🚀 Starting Deployment for Market Intelligence Bot v7.5..."
+echo "🚀 Starting Deployment for Market Pulse v1.0..."
 echo "--------------------------------------------------------"
 
 # 1. UPDATE SYSTEM
@@ -80,7 +80,7 @@ SERVICE_PATH="/etc/systemd/system/nsebot.service"
 # Dynamically write service file with correct user paths
 sudo bash -c "cat > $SERVICE_PATH" <<EOT
 [Unit]
-Description=Market Intelligence Bot v7.5 (Live)
+Description=Market Pulse Intelligence Bot v1.0 (Live)
 After=network.target
 
 [Service]
@@ -88,7 +88,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$REPO_DIR
 # Using the python executable from venv
-ExecStart=$REPO_DIR/venv/bin/python3 -m nse_monitor.main
+ExecStart=$REPO_DIR/venv/bin/python3 v7_launcher.py
 # Environment
 EnvironmentFile=$REPO_DIR/.env
 # Crash Recovery
