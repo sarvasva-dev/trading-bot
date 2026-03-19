@@ -27,20 +27,20 @@ class MarketScheduler:
                 time.sleep(3600)
             return
 
-        logger.info("Initializing Intelligence Schedule (v7.5)...")
+        logger.info("Initializing Market Pulse Schedule (v1.0)...")
         
-        # 1. High-Frequency Intelligence Cycle (Now handled in main.py loop)
-        # We keep this for compatibility if scheduler is used as entry point
+        # 1. 3-Minute Intelligence Cycle (Standardized)
         self.scheduler.add_job(
             self.safe_run_cycle,
             'interval',
-            minutes=2,
+            minutes=3,
             id='market_intel_cycle'
         )
 
         # 2. Daily Pre-Market Multi-Source Report (08:30 IST, Mon-Fri)
+        # Now uses the new AI Batch Summarization logic
         self.scheduler.add_job(
-            self.send_pre_market_report,
+            self.system.report_builder.generate_morning_report,
             'cron',
             day_of_week='mon-fri',
             hour=8,
@@ -48,7 +48,15 @@ class MarketScheduler:
             id='pre_market_report'
         )
 
-        logger.info("Scheduler started with 08:30 reports.")
+        # 3. Dynamic User Update Handling (Every 1 minute)
+        self.scheduler.add_job(
+            self.system.bot.handle_updates,
+            'interval',
+            minutes=1,
+            id='telegram_updates'
+        )
+
+        logger.info("Scheduler started (08:30 IST Reports | 3-Min Polling).")
         try:
             self.scheduler.start()
         except (KeyboardInterrupt, SystemExit):

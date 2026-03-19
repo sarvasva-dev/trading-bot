@@ -1,10 +1,10 @@
-﻿import logging
+import logging
 import requests
 import time
 import html
 import os
 import json
-from nse_monitor.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS
+from nse_monitor.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, BOT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +61,15 @@ class TelegramBot:
                             
                             # Send Welcome Message
                             welcome_text = (
-                                f" <b>Welcome to Trading News Bot, {first_name}!</b>\n\n"
-                                f"I am now tracking high-impact market events for you 24/7.\n\n"
-                                f" <b>Real-time Alerts:</b> Enabled\n"
-                                f" <b>Pre-Market Reports:</b> 09:00 IST\n"
-                                f" <b>AI Analysis:</b> Strict Filters Applied"
+                                f" 🛰️ <b>{BOT_NAME} Activated</b>\n\n"
+                                f"Hello {first_name}! I am your high-frequency intelligence engine.\n\n"
+                                f" <b>Sources tracked:</b>\n"
+                                f"• NSE (Direct Filings)\n"
+                                f"• MoneyControl & Economic Times\n\n"
+                                f" <b>What to expect:</b>\n"
+                                f"⚡ <b>Real-time Alerts:</b> High-impact news during market hours.\n"
+                                f"🌅 <b>Morning Recap:</b> Consolidated intelligence at 08:30 IST.\n"
+                                f"🧠 <b>AI Analysis:</b> Every event is cross-verified for impact."
                             )
                             self._send_raw(chat_id, welcome_text)
                             logger.info(f"Dynamically registered new user: {first_name} ({chat_id})")

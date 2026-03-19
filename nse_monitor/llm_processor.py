@@ -177,6 +177,52 @@ If Invalid/Junk: "valid_event": false.
             logger.error(f"Sarvam AI failed: {e}")
             return None
 
+    def summarize_morning_batch(self, analyzed_items):
+        """
+        Creates a high-level executive summary of all off-market news (weekend/overnight).
+        Used specifically for the 08:30 AM Morning Intel Report.
+        """
+        if not self.sarvam_client or not analyzed_items:
+            return None
+
+        # Build list of news with their scores
+        news_list_str = ""
+        for i, item in enumerate(analyzed_items):
+            # item is a tuple or dict depending on DB query
+            if isinstance(item, tuple):
+                headline, summary, source, url, impact = item
+            else:
+                headline = item.get("headline")
+                summary = item.get("summary")
+                source = item.get("source")
+                url = item.get("url")
+                impact = item.get("impact_score")
+
+            news_list_str += f"{i+1}. [{source}] {headline} (Impact: {impact}/10) | Source: {url}\n"
+
+        prompt = f"""
+You are the Chief Intelligence Officer for a top-tier Indian Hedge Fund.
+Task: Synthesize the following off-market news events into a single "EXECUTIVE MARKET PREVIEW" for the 09:15 open.
+
+OFF-MARKET NEWS BACKLOG:
+{news_list_str}
+
+REQUIREMENTS:
+1. **CRITICAL NARRATIVE**: Identify the single most important theme (e.g., "Macro weakness led by US Fed", "Positive Corporate Earnings week").
+2. **SECTOR FOCUS**: Mention which sectors (Banking, IT, Auto, etc.) are likely to see the most action.
+3. **TONE**: Professional, urgent, and concise.
+4. **FORMAT**: Markdown for Telegram. Use Bold for impact.
+
+RESPONSE FORMAT (JSON):
+{{
+  "theme": "Top Theme Headline",
+  "summary": "3-4 sentences of deep synthesis.",
+  "sectors_to_watch": "Sector 1, Sector 2",
+  "sentiment": "Positive | Negative | Cautious"
+}}
+"""
+        return self._run_prompt(prompt)
+
     # Backward compatibility / Batch wrapper (treats single item as event)
     def analyze_news_batch(self, news_items, recent_news=None):
         results = []

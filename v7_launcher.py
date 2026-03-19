@@ -25,15 +25,16 @@ logger = logging.getLogger("V7_Launcher")
 import time
 
 def main():
-    logger.info("Redirecting to nse_monitor.main (Smart 5-Min Dynamic Polling)...")
+    logger.info("Initializing Market Pulse v1.0...")
     # Run migration/wipe check on every start
     try:
         migrate()
     except Exception as e:
         logger.error(f"Migration error: {e}")
         
-    from nse_monitor.main import main as nse_main
-    nse_main()
+    system = MarketIntelligenceSystem()
+    scheduler = MarketScheduler(system)
+    scheduler.start()
 
 if __name__ == "__main__":
     main()

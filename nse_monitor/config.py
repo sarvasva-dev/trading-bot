@@ -11,6 +11,9 @@ load_dotenv(os.path.join(ROOT_DIR, ".env"))
 NSE_BASE_URL = "https://www.nseindia.com"
 NSE_API_URL = f"{NSE_BASE_URL}/api/corporate-announcements"
 
+# Bot Branding
+BOT_NAME = "Market Pulse"
+
 # Telegram Config
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 # Support multiple chat IDs (comma-separated)
