@@ -9,9 +9,46 @@ import warnings
 from datetime import datetime
 import pytz
 
+import atexit
+import signal
+
 # Suppress warnings from HuggingFace/Transformers
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+def check_single_instance():
+    """Ensures only one instance of the bot is running using a PID file lock."""
+    pid_file = "nsebot.pid"
+    
+    if os.path.isfile(pid_file):
+        try:
+            with open(pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            
+            # Check if process is running (UNIX/Linux specific mostly)
+            # Sends signal 0 which does nothing but checks if process exists
+            try:
+                os.kill(old_pid, 0)
+                logger.error(f"FATAL: Another instance of NSEBot is already running (PID {old_pid}). Exiting to prevent duplicates.")
+                print(f"FATAL: Another instance of NSEBot is already running (PID {old_pid}). Exiting.")
+                sys.exit(1)
+            except OSError:
+                # Process dead, remove stale file
+                if os.path.exists(pid_file):
+                    os.remove(pid_file)
+        except (ValueError, FileNotFoundError):
+             if os.path.exists(pid_file):
+                os.remove(pid_file)
+
+    # Write current PID
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+    
+    # Register cleanup
+    def cleanup_pid():
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    atexit.register(cleanup_pid)
 
 from nse_monitor.config import LOGS_DIR, ALERT_THRESHOLD, MAX_ALERTS_PER_HOUR, BOT_NAME
 from nse_monitor.database import Database
@@ -316,6 +353,7 @@ class MarketIntelligenceSystem:
 
 def main():
     try:
+        check_single_instance()
         system = MarketIntelligenceSystem()
         from nse_monitor.scheduler import MarketScheduler
         scheduler = MarketScheduler(system)
