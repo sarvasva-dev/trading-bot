@@ -177,7 +177,10 @@ class TelegramBot:
         )
 
         success = False
-        for chat_id in self.chat_ids:
+        # Remove duplicates from chat_ids to prevent double sending
+        unique_chat_ids = list(set(self.chat_ids))
+
+        for chat_id in unique_chat_ids:
             payload = {
                 "chat_id": chat_id,
                 "text": message,
