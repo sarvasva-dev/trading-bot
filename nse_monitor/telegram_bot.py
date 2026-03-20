@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 class TelegramBot:
     def __init__(self):
         self.token = TELEGRAM_BOT_TOKEN
-        # Ensure we work with a mutable list rather than a tuple or strict config ref
-        self.chat_ids = list(TELEGRAM_CHAT_IDS) if TELEGRAM_CHAT_IDS else []
+        # Ensure we always work with strings for consistent deduplication
+        self.chat_ids = [str(cid) for cid in TELEGRAM_CHAT_IDS] if TELEGRAM_CHAT_IDS else []
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.last_update_id = 0
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
@@ -24,8 +24,10 @@ class TelegramBot:
                 with open(self.dynamic_ids_file, "r") as f:
                     extra_ids = json.load(f)
                     for cid in extra_ids:
-                        if cid not in self.chat_ids:
-                            self.chat_ids.append(cid)
+                        # Convert to string before checking/adding
+                        cid_str = str(cid)
+                        if cid_str not in self.chat_ids:
+                            self.chat_ids.append(cid_str)
             except Exception as e:
                 logger.error(f"Error loading dynamic chat IDs: {e}")
 
@@ -33,7 +35,8 @@ class TelegramBot:
         os.makedirs(os.path.dirname(self.dynamic_ids_file), exist_ok=True)
         try:
             with open(self.dynamic_ids_file, "w") as f:
-                json.dump(list(set(self.chat_ids)), f)
+                # Save unique set of strings
+                json.dump(list(set([str(cid) for cid in self.chat_ids])), f)
         except Exception as e:
             logger.error(f"Error saving dynamic IDs: {e}")
 
@@ -51,7 +54,7 @@ class TelegramBot:
                 for update in data["result"]:
                     self.last_update_id = update["update_id"]
                     if "message" in update:
-                        chat_id = update["message"]["chat"]["id"]
+                        chat_id = str(update["message"]["chat"]["id"]) # Normalize to string
                         text = update["message"].get("text", "").strip()
                         first_name = update["message"]["from"].get("first_name", "User")
                         
