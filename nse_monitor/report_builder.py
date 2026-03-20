@@ -37,54 +37,91 @@ class ReportBuilder:
         logger.info(f"Building {BOT_NAME} Pre-Market Intelligence Report (Last {hours} hours)...")
         
         # 1. Fetch All Analyzed News for the Recap
-        all_news = self.db.get_latest_news(min_impact=4, hours=hours) # Fetch all relevant news
+        all_news_rows = self.db.get_recent_news(hours=hours)
+        all_news = []
+        if all_news_rows:
+            for row in all_news_rows:
+                if isinstance(row, dict):
+                    all_news.append(row)
         
         # 2. Generate Master AI Summary if news exists
-        ai_summary_text = ""
+        ai_res = {}
         if all_news:
-             ai_res = self.llm_processor.summarize_morning_batch(all_news)
-             if ai_res:
-                 ai_summary_text = (
-                     f"🧠 <b>EXECUTIVE PREVIEW: {ai_res.get('theme', 'Market Update')}</b>\n"
-                     f"<i>{ai_res.get('summary', '')}</i>\n\n"
-                     f"🎯 <b>Sectors to watch:</b> {ai_res.get('sectors_to_watch', 'All')}\n"
-                     f"📊 <b>Sentiment:</b> {ai_res.get('sentiment', 'Neutral')}\n\n"
-                     f"---"
-                 )
+             ai_res = self.llm_processor.summarize_morning_batch(all_news) or {}
 
-        report = [f"<b>🌅 {BOT_NAME.upper()} MORNING INTEL ({datetime.now().strftime('%d %b')})</b>\n"]
-        if ai_summary_text:
-            report.append(ai_summary_text)
+        # 3. Format Report (New Style)
+        report = []
         
-        report.append("<i>Individual High-Impact Events:</i>\n")
+        # HEADER
+        date_str = datetime.now().strftime('%d %b')
+        report.append(f"🌅 <b>{BOT_NAME.upper()} MORNING INTEL</b> ({date_str})")
         
-        # Section 1: Global Events
-        global_news = [item for item in self.db.get_latest_news(min_impact=5, hours=hours) 
-                       if any(kw in item[0].lower() for kw in ["global", "us", "fed", "nasdaq", "dow", "nikkei", "inflation", "oil", "crude"])]
-        self._add_section(report, "Global Cues 🌎", global_news[:3])
+        # EXECUTIVE SUMMARY
+        theme = ai_res.get('theme', 'Market Update')
+        summary = ai_res.get('summary', 'No significant data available.')
+        sectors = ai_res.get('sectors_to_watch', 'All')
+        sentiment = ai_res.get('sentiment', 'Neutral')
         
-        # Section 2: Major Indian News
-        indian_news = self.db.get_latest_news(min_impact=7, hours=hours)
-        self._add_section(report, "Market Moving News 🇮🇳", indian_news[:3])
+        sentiment_emoji = "🔴" if "Bear" in sentiment else "🟢" if "Bull" in sentiment else "🟡"
         
-        # Section 3: Corporate Announcements
-        corp_news = self.db.get_latest_news(perspective="ANNOUNCEMENT", min_impact=4, hours=hours)
-        self._add_section(report, "Corporate Filings 📢", corp_news[:3])
+        report.append(f"\n🧠 <b>EXECUTIVE PREVIEW: {theme}</b>")
+        report.append(f"{summary}\n")
+        report.append(f"🎯 <b>Sectors to watch:</b> {sectors}")
+        report.append(f"📊 <b>Sentiment:</b> {sentiment_emoji} <b>{sentiment}</b>")
+        report.append("────────────────────────\n")
+
+        # IMPACT EVENTS (Top 5 Sorted by Impact)
+        report.append("🚨 <b>TOP IMPACT EVENTS</b>")
         
-        # Section 4: Risks & Opportunities
-        risks = self.db.get_latest_news(sentiment="Bearish", min_impact=6, hours=hours)
-        self._add_section(report, "Risk factors 🔻", risks[:3])
+        # Sort by Impact Score (Descending)
+        sorted_news = sorted(all_news, key=lambda x: x.get('impact_score', 0), reverse=True)
+        top_impact = sorted_news[:5]
         
-        opps = self.db.get_latest_news(sentiment="Bullish", min_impact=6, hours=hours)
-        self._add_section(report, "Potential Upside 🔼", opps[:3])
+        if not top_impact:
+            report.append("<i>No high impact events detected.</i>")
+            
+        for idx, item in enumerate(top_impact, 1):
+            headline = item.get('headline', 'N/A')
+            impact = item.get('impact_score', 0)
+            url = item.get('url', '#')
+            source = item.get('source', 'News')
+            summary_short = item.get('summary', '').split('.')[0] + "." # Take first sentence
+            
+            # Short Link Logic
+            link_text = "Read Source"
+            if "nse" in source.lower():
+                link_text = "PDF Filing"
+                if url and not url.startswith("http"):
+                    url = f"https://nsearchives.nseindia.com/corporate/{url}"
+            
+            report.append(f"<b>{idx}️⃣ {headline}</b> (Impact: {impact}/10)")
+            report.append(f"<i>{summary_short}</i>")
+            report.append(f"👉 <a href='{url}'>{link_text}</a>\n")
+
+        # STOCK SPECIFIC (Lower Impact but Specific)
+        report.append("📋 <b>STOCK SPECIFIC ACTION</b>")
+        stock_news = sorted_news[5:10] # Next 5
+        
+        if not stock_news:
+             report.append("<i>-</i>")
+
+        for item in stock_news:
+            headline = item.get('headline', 'N/A')
+            url = item.get('url', '#')
+            source = item.get('source', 'News')
+            
+            link_text = "Source"
+            if "nse" in source.lower():
+                link_text = "PDF"
+                if url and not url.startswith("http"):
+                    url = f"https://nsearchives.nseindia.com/corporate/{url}"
+
+            report.append(f"• <b>{headline}</b> [<a href='{url}'>{link_text}</a>]")
+
+        report.append(f"\n<i>Generated by {BOT_NAME} AI</i>")
         
         return "\n".join(report)
 
-    def _add_section(self, report, title, items):
-        if not items:
-            return
-        report.append(f"<b>{title}</b>")
-        for headline, summary, source, url, impact in items:
-            # Concise bullet format with 1-10 Impact Score
-            report.append(f"• <a href='{url}'>{headline}</a> ({source} | Impact: {impact}/10)")
-        report.append("") # Spacer
+    # _add_section_v2 is no longer needed but kept for compatibility if referenced elsewhere
+    def _add_section_v2(self, report, title, items):
+        pass
