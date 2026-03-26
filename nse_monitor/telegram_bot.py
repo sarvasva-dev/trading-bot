@@ -222,8 +222,20 @@ class TelegramBot:
         self._send_raw(chat_id, msg, keyboard)
 
     def _send_welcome(self, chat_id, first_name):
-        """Unified Dashboard and Onboarding (v10.1)."""
+        """Unified Dashboard, Disclaimer and Onboarding (v10.2)."""
         user = self.db.get_user(chat_id)
+        
+        intro = (
+            f"🚀 <b>{BOT_NAME} Institutional Engine</b>\n\n"
+            f"Hello {first_name}! I am your high-precision NSE intelligence system.\n"
+            f"I scan corporate filings in real-time to find high-impact institutional signals.\n"
+        )
+        
+        disclaimer = (
+            f"\n⚖️ <b>SEBI DISCLAIMER:</b>\n"
+            f"<i>Non-SEBI Educational Resource. Content is for informational purposes only. "
+            f"Trading involves risk. Certified professionals only.</i>\n"
+        )
         
         if user and user[4] > 0: # If has active credits, show Dashboard
             uid, name, uname, active, days = user
@@ -235,18 +247,20 @@ class TelegramBot:
             expiry_str = (now + timedelta(days=offset_days)).strftime("%d %b %Y")
             
             dashboard = (
-                f"🚀 <b>MARKET PULSE DASHBOARD (v10.1)</b>\n"
+                f"🛰️ <b>DASHBOARD: {name}</b>\n"
                 f"────────────────────────\n"
-                f"👤 <b>User:</b> {name}\n"
                 f"⏳ <b>Credits:</b> <code>{days} Market Days</code>\n"
                 f"📅 <b>Est. Expiry:</b> <code>{expiry_str}</code>\n"
                 f"📡 <b>Status:</b> <b>PREMIUM ACTIVE 💎</b>\n"
                 f"────────────────────────\n\n"
+                f"{intro}"
+                f"────────────────────────\n"
                 f"🛠️ <b>Quick Shortcuts:</b>\n"
                 f"• /plan - See detailed balance\n"
                 f"• /bulk - Today's big deals\n"
                 f"• /upcoming - NSE Corporate Calendar\n"
                 f"• /support - WhatsApp Admin"
+                f"{disclaimer}"
             )
             
             keyboard = {
@@ -259,13 +273,10 @@ class TelegramBot:
             
         else: # New or Expired: Show Welcome + Instructions
             welcome_text = (
-                f"🚀 <b>{BOT_NAME} Institutional Engine</b>\n\n"
-                f"Hello {first_name}! I am your high-precision NSE intelligence system.\n"
-                f"I scan corporate filings in real-time to find high-impact institutional signals.\n\n"
+                f"{intro}\n"
                 f"💎 <b>Current Status:</b> No Active Subscription\n"
                 f"────────────────────────\n"
-                f"⚖️ <b>SEBI DISCLAIMER:</b>\n"
-                f"<i>Non-SEBI Educational Resource. Content is for informational purposes only. Trading involves risk.</i>\n\n"
+                f"{disclaimer}\n"
             )
             welcome_text += self._get_plan_menu()
             self._send_raw(chat_id, welcome_text)
