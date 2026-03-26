@@ -6,7 +6,7 @@ import json
 import html
 from datetime import datetime
 import pytz
-from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD, BOT_NAME
+from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD, BOT_NAME, TELEGRAM_BOT_TOKEN
 from nse_monitor.database import Database
 
 # Logging Setup
@@ -25,6 +25,7 @@ class AdminPanel:
         self.token = TELEGRAM_ADMIN_BOT_TOKEN
         self.owner_id = str(TELEGRAM_ADMIN_CHAT_ID)
         self.base_url = f"https://api.telegram.org/bot{self.token}"
+        self.signal_bot_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         self.db = Database()
         self.last_update_id = 0
         self.authenticated_sessions = {} # chat_id: timestamp
@@ -151,7 +152,7 @@ class AdminPanel:
     def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"📊 <b>PRODUCTION STATUS (v8.8)</b>\n"
+            f"📊 <b>PRODUCTION STATUS (v9.0)</b>\n"
             f"────────────────────────\n"
             f"✅ <b>Signal Engine:</b> ACTIVE\n"
             f"🧠 <b>AI Processor:</b> ONLINE\n\n"
@@ -211,6 +212,20 @@ class AdminPanel:
         self.db.add_working_days(target_id, int(days))
         self.db.toggle_user_status(target_id, 1)
         self._send(chat_id, f"✅ <b>Granted {days} days to {target_id}.</b> User is now ACTIVE.")
+        
+        # 🔔 Notify Target User via Signal Bot (Rule #24)
+        msg = (
+            f"🎁 <b>Manual Account Activation!</b>\n"
+            f"────────────────────────\n"
+            f"The Administrator has credited your account with <b>{days} Market Days</b>.\n\n"
+            f"Your professional intelligence engine is now <b>LIVE</b> and scanning for NSE signals. 📈"
+        )
+        self._notify_user_via_signal_bot(target_id, msg)
+
+    def _notify_user_via_signal_bot(self, user_id, text):
+        """Cross-bot bridge for system notifications (Rule #24)."""
+        payload = {"chat_id": user_id, "text": text, "parse_mode": "HTML"}
+        requests.post(f"{self.signal_bot_url}/sendMessage", json=payload, timeout=5)
 
     def _handle_broadcast(self, chat_id, text):
         msg_body = text.replace("/broadcast", "").strip()

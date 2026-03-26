@@ -105,8 +105,8 @@ class TelegramBot:
                         # 2. Command Router
                         if text == "/start":
                             self._send_welcome(chat_id, first_name)
-                        elif text == "/me":
-                            self._handle_me(chat_id, first_name)
+                        elif text == "/plan" or text == "/me":
+                            self._handle_plan(chat_id, first_name)
                         elif text == "/subscribe":
                             self._handle_subscribe_menu(chat_id)
                         elif text.startswith("/sub_"):
@@ -135,6 +135,48 @@ class TelegramBot:
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
+
+    def _handle_plan(self, chat_id, first_name):
+        """Rich user plan and expiry tracking (v9.0)."""
+        user = self.db.get_user(chat_id)
+        if not user:
+             self._send_welcome(chat_id, first_name)
+             return
+
+        uid, name, uname, active, days = user
+        
+        # Calculate Estimated Expiry (Simple offset for weekends)
+        from datetime import datetime, timedelta
+        tz = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(tz)
+        
+        # Estimate: Add ~40% for weekends if long duration
+        offset_days = days + (days // 5) * 2
+        expiry_dt = now + timedelta(days=offset_days)
+        expiry_str = expiry_dt.strftime("%d %b %Y")
+        
+        status_icon = "💎" if active else "🆓"
+        status_text = "PREMIUM ACTIVE" if active else "FREE/EXPIRED"
+        
+        msg = (
+            f"{status_icon} <b>YOUR MARKET PULSE PLAN</b>\n"
+            f"────────────────────────\n"
+            f"👤 <b>User:</b> {name}\n"
+            f"🆔 <b>ID:</b> <code>{chat_id}</code>\n\n"
+            f"⏳ <b>Credits:</b> <code>{days} Market Days</code>\n"
+            f"📅 <b>Est. Expiry:</b> <code>{expiry_str}</code>\n"
+            f"📡 <b>Status:</b> <b>{status_text}</b>\n"
+            f"────────────────────────\n"
+            f"<i>(Note: Credits only debit on trading days)</i>"
+        )
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "💎 Renew / Upgrade Plan", "callback_data": "sub_menu"}],
+                [{"text": "🛠️ Contact Admin", "url": "https://t.me/marketnewsv1bot"}]
+            ]
+        }
+        self._send_raw(chat_id, msg, keyboard)
 
     def _send_welcome(self, chat_id, first_name):
         welcome_text = (

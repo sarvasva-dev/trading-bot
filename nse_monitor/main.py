@@ -122,8 +122,15 @@ class MarketIntelligenceSystem:
                     self.db.add_working_days(chat_id, days_to_add)
                     # 2. Mark as processed
                     self.db.update_payment_link_status(pl_id, 'processed')
-                    # 3. Notify user
-                    self.bot._send_raw(chat_id, f"✅ <b>Payment Successful!</b>\nWe've detected your transaction (Ref: <code>{pl_id}</code>). <b>{days_to_add} Market Days</b> have been added to your account. Enjoy!)")
+                    # 3. Notify user (Rule #24)
+                    msg = (
+                        f"✅ <b>Payment Successful!</b>\n"
+                        f"────────────────────────\n"
+                        f"We've verified your transaction (Ref: <code>{pl_id}</code>).\n\n"
+                        f"<b>{days_to_add} Market Days</b> have been added to your account.\n"
+                        f"Use /plan to see your new expiry date. 📈"
+                    )
+                    self.bot._send_raw(chat_id, msg)
                     logger.warning(f"AUTO-PAYMENT SUCCESS: {chat_id} | +{days_to_add} days")
                 else:
                     # Plan days might be 0 but status could be paid? 
