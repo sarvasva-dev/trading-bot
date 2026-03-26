@@ -28,6 +28,17 @@ class AdminPanel:
         self.db = Database()
         self.last_update_id = 0
         self.authenticated_sessions = {} # chat_id: timestamp
+        self._set_latest_offset()
+
+    def _set_latest_offset(self):
+        """Skip all stale messages on startup (Rule #24)."""
+        try:
+            r = requests.get(f"{self.base_url}/getUpdates", params={"offset": -1, "limit": 1}, timeout=5)
+            data = r.json()
+            if data.get("ok") and data.get("result"):
+                self.last_update_id = data["result"][0]["update_id"]
+                logger.info(f"Admin Bot Offset Synced: {self.last_update_id}")
+        except: pass
 
     def is_admin(self, chat_id):
         cid = str(chat_id)
@@ -96,11 +107,12 @@ class AdminPanel:
             self._handle_broadcast(chat_id, text)
 
     def _handle_callback(self, cb):
-        chat_id = str(cb["message"]["chat"]["id"])
+        from_id = str(cb["from"]["id"])
+        chat_id = from_id # Private chat context
         data = cb["data"]
         
-        if not self.is_admin(chat_id):
-            self._answer_callback(cb["id"], "Session Expired!")
+        if not self.is_admin(from_id):
+            self._answer_callback(cb["id"], "Session Expired! Please login.")
             return
 
         if data == "menu_status":
