@@ -148,7 +148,6 @@ class TelegramBot:
                         elif text == "/admin":
                             self._send_raw(chat_id, "🔐 <b>Admin Dashboard (Interactive)</b>\nPlease use the dedicated Admin Bot for button-based controls.")
                         
-                        # 👑 OWNER-ONLY FALLBACK COMMANDS (Rule #24)
                         elif str(chat_id) == os.getenv("TELEGRAM_ADMIN_CHAT_ID"):
                             if text.startswith("/grant"):
                                 parts = text.split()
@@ -160,6 +159,22 @@ class TelegramBot:
                             elif text == "/users":
                                 stats = self.db.get_user_stats()
                                 self._send_raw(chat_id, f"👥 Total: {stats[0]} | Active: {stats[1]}")
+
+                    # 3. Callback Query Handling (Rule #24)
+                    elif "callback_query" in update:
+                        cb = update["callback_query"]
+                        cb_id = cb["id"]
+                        chat_id = str(cb["message"]["chat"]["id"])
+                        msg_id = cb["message"]["message_id"]
+                        data = cb.get("data", "")
+                        
+                        logger.info(f"Callback Received: {data} from {chat_id}")
+                        
+                        if data == "sub_menu":
+                            self._handle_subscribe_menu(chat_id)
+                        
+                        # Answer callback
+                        requests.post(f"{self.base_url}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
@@ -207,21 +222,53 @@ class TelegramBot:
         self._send_raw(chat_id, msg, keyboard)
 
     def _send_welcome(self, chat_id, first_name):
-        welcome_text = (
-            f"🚀 <b>{BOT_NAME} Online</b>\n\n"
-            f"Hello {first_name}! I am your high-precision NSE intelligence engine.\n\n"
-            f"<b>Core Capabilities:</b>\n"
-            f"• Direct Institutional Corporate Filings\n"
-            f"• Real-time high-impact signals (>7 Score)\n"
-            f"• Bulk/Block Deal intelligence\n\n"
-            f"⚖️ <b>SEBI DISCLAIMER:</b>\n"
-            f"<i>This automated engine is for INFORMATIONAL & EDUCATIONAL purposes only. "
-            f"Content does not constitute financial, legal, or investment advice. "
-            f"We are NOT SEBI Registered advisors. Trading carries substantial risk; "
-            f"please consult a certified professional before taking any action.</i>\n\n"
-        )
-        welcome_text += self._get_plan_menu()
-        self._send_raw(chat_id, welcome_text)
+        """Unified Dashboard and Onboarding (v10.1)."""
+        user = self.db.get_user(chat_id)
+        
+        if user and user[4] > 0: # If has active credits, show Dashboard
+            uid, name, uname, active, days = user
+            
+            # Calculate Expiry
+            tz = pytz.timezone("Asia/Kolkata")
+            now = datetime.now(tz)
+            offset_days = days + (days // 5) * 2
+            expiry_str = (now + timedelta(days=offset_days)).strftime("%d %b %Y")
+            
+            dashboard = (
+                f"🚀 <b>MARKET PULSE DASHBOARD (v10.1)</b>\n"
+                f"────────────────────────\n"
+                f"👤 <b>User:</b> {name}\n"
+                f"⏳ <b>Credits:</b> <code>{days} Market Days</code>\n"
+                f"📅 <b>Est. Expiry:</b> <code>{expiry_str}</code>\n"
+                f"📡 <b>Status:</b> <b>PREMIUM ACTIVE 💎</b>\n"
+                f"────────────────────────\n\n"
+                f"🛠️ <b>Quick Shortcuts:</b>\n"
+                f"• /plan - See detailed balance\n"
+                f"• /bulk - Today's big deals\n"
+                f"• /upcoming - NSE Corporate Calendar\n"
+                f"• /support - WhatsApp Admin"
+            )
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🛒 Subscribe / Top-up", "callback_data": "sub_menu"}],
+                    [{"text": "🛠️ Contact Admin", "url": "https://wa.me/917985040858"}]
+                ]
+            }
+            self._send_raw(chat_id, dashboard, keyboard)
+            
+        else: # New or Expired: Show Welcome + Instructions
+            welcome_text = (
+                f"🚀 <b>{BOT_NAME} Institutional Engine</b>\n\n"
+                f"Hello {first_name}! I am your high-precision NSE intelligence system.\n"
+                f"I scan corporate filings in real-time to find high-impact institutional signals.\n\n"
+                f"💎 <b>Current Status:</b> No Active Subscription\n"
+                f"────────────────────────\n"
+                f"⚖️ <b>SEBI DISCLAIMER:</b>\n"
+                f"<i>Non-SEBI Educational Resource. Content is for informational purposes only. Trading involves risk.</i>\n\n"
+            )
+            welcome_text += self._get_plan_menu()
+            self._send_raw(chat_id, welcome_text)
 
     def _get_plan_menu(self):
         """Helper to return the structured plan menu text (Dynamic v8.2)."""
