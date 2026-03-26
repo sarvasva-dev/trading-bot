@@ -176,11 +176,19 @@ class MarketIntelligenceSystem:
             # AI Institutional Logic (22 Rules)
             analysis = self.llm_processor.analyze_single_event([item], market_status="OPEN" if market_on else "CLOSED")
             
-            if not analysis or not analysis.get("valid_event"): continue
+            if not analysis or not analysis.get("valid_event"): 
+                logger.info(f"⏩ [AI SKIP] {item.get('symbol', 'N/A')}: Concluded/Invalid Item.")
+                continue
             
             import nse_monitor.config as config
             impact = analysis.get("impact_score", 0)
-            if impact < config.ALERT_THRESHOLD: continue # RULE #12
+            sentiment = analysis.get("sentiment", "Neutral")
+            
+            if impact < config.ALERT_THRESHOLD:
+                logger.info(f"📉 [AI RESULT] {item.get('symbol', 'N/A')} | Score: {impact} | Status: Rejected (Below Threshold)")
+                continue
+            
+            logger.info(f"🔥 [AI ALERT] {item.get('symbol', 'N/A')} | Score: {impact} | sentiment: {sentiment} -> BROADCASTING")
             
             sector = analysis.get("sector", "Unknown")
             if sector in used_sectors and impact < 8: continue # RULE #15 diversity
