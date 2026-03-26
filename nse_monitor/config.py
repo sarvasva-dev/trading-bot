@@ -75,3 +75,6 @@ RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_placeholder")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "secret_placeholder")
 SUBSCRIPTION_PRICE_INR = int(os.getenv("SUBSCRIPTION_PRICE_INR", 499)) # Default ₹499
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", 30)) # Default 30 days
+
+# --- SCHEDULER CONTROLS ---
+DISABLE_SCHEDULER = False # Set to True for manual maintenance modes
