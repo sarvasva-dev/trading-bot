@@ -152,7 +152,7 @@ class AdminPanel:
             f"👥 <b>Total Users:</b> {total}\n"
             f"⚡ <b>Active Subs:</b> {active}\n"
             f"────────────────────────\n"
-            f"📍 <i>Build: v8.0.0 Stable</i>"
+            f"📍 <i>Build: v8.6 Institutional Prime</i>"
         )
         self._send(chat_id, text)
 

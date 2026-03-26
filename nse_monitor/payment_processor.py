@@ -1,4 +1,7 @@
-import razorpay
+try:
+    import razorpay
+except ImportError:
+    razorpay = None
 import logging
 from datetime import datetime, timedelta
 from nse_monitor.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, SUBSCRIPTION_PLANS
