@@ -99,6 +99,8 @@ class TelegramBot:
                             self._send_welcome(chat_id, first_name)
                         elif text.startswith("/login"):
                             self._handle_login(chat_id, text)
+                        elif text == "/logout":
+                            self._handle_logout(chat_id)
                         elif text == "/status":
                             self._handle_status(chat_id)
                         elif text == "/bulk":
@@ -139,6 +141,14 @@ class TelegramBot:
         else:
             self._send_raw(chat_id, "🚫 <b>Invalid Password.</b> Access Denied.")
             logger.error(f"FAILED LOGIN ATTEMPT: {chat_id}")
+
+    def _handle_logout(self, chat_id):
+        if str(chat_id) in self.admin_sessions:
+            del self.admin_sessions[str(chat_id)]
+            self._send_raw(chat_id, "🔒 <b>Logged Out.</b>\nYour admin session has been terminated.")
+            logger.info(f"ADMIN LOGOUT: {chat_id}")
+        else:
+            self._send_raw(chat_id, "No active admin session found.")
 
     def _handle_status(self, chat_id):
         if not self.is_admin(chat_id):
