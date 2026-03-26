@@ -4,17 +4,18 @@ import time
 import html
 import os
 import json
-from nse_monitor.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, BOT_NAME, ADMIN_PASSWORD
+from nse_monitor.config import BOT_NAME, ADMIN_PASSWORD
+from nse_monitor.payment_processor import RazorpayProcessor
 
 logger = logging.getLogger(__name__)
 
 class TelegramBot:
     def __init__(self, db=None):
-        self.token = TELEGRAM_BOT_TOKEN
-        self.chat_ids = [str(cid) for cid in TELEGRAM_CHAT_IDS] if TELEGRAM_CHAT_IDS else []
+        self.token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.base_url = f"https://api.telegram.org/bot{self.token}"
-        self.last_update_id = 0
         self.db = db
+        self.payment_processor = RazorpayProcessor()
+        self.chat_ids = set()
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
         self.admin_sessions = {} # chat_id: timestamp
         self._load_dynamic_ids()
@@ -60,10 +61,16 @@ class TelegramBot:
         url = f"{self.base_url}/setMyCommands"
         commands = [
             {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
+            {"command": "subscribe", "description": "Get Premium Access (Razorpay Link)"},
+            {"command": "me", "description": "Show My ID & Subscription Balance"},
+            {"command": "check_payment", "description": "Verify & Activate Premium <link_id>"},
             {"command": "login", "description": "Admin Authentication (Password Required)"},
             {"command": "status", "description": "Admin: System & User Stats"},
-            {"command": "bulk", "description": "Latest Bulk/Block Deal Intel"},
-            {"command": "upcoming", "description": "Upcoming Corporate Actions"}
+            {"command": "grant", "description": "Admin: Grant Days <id> <days>"},
+            {"command": "activate", "description": "Admin: Activate User <id>"},
+            {"command": "deactivate", "description": "Admin: Disable User <id>"},
+            {"command": "users", "description": "Admin: List Users (Audit)"},
+            {"command": "broadcast", "description": "Admin: Mass Notify Active Users"}
         ]
         try:
             requests.post(url, json={"commands": commands}, timeout=10)
@@ -91,18 +98,42 @@ class TelegramBot:
                         # 1. Registration Logic
                         if chat_id not in self.chat_ids:
                             username = update["message"]["from"].get("username", "Unknown")
-                            self._save_dynamic_ids(chat_id, first_name, username)
-                            logger.info(f"New User Registered: {first_name} (@{username}) | ID: {chat_id}")
+                            is_new = self.db.save_user(chat_id, first_name, username) if self.db else False
+                            self.chat_ids.add(chat_id)
+                            
+                            if is_new:
+                                self._send_raw(chat_id, "🎁 <b>Welcome Offer Activated!</b>\nYou've been credited with <b>2 Free Market Days</b> as a first-time user. Signals start now!")
+                                logger.info(f"New User Registered + Trial: {first_name} (@{username}) | ID: {chat_id}")
+                            else:
+                                logger.info(f"Existing User Re-synced: {first_name} | ID: {chat_id}")
 
                         # 2. Command Router
                         if text == "/start":
                             self._send_welcome(chat_id, first_name)
+                        elif text == "/me":
+                            self._handle_me(chat_id, first_name)
+                        elif text == "/subscribe":
+                            self._handle_subscribe_menu(chat_id)
+                        elif text.startswith("/sub_"):
+                            self._handle_plan_selection(chat_id, text, first_name)
+                        elif text.startswith("/check_payment"):
+                            self._handle_check_payment(chat_id, text)
                         elif text.startswith("/login"):
                             self._handle_login(chat_id, text)
                         elif text == "/logout":
                             self._handle_logout(chat_id)
                         elif text == "/status":
                             self._handle_status(chat_id)
+                        elif text == "/users":
+                            self._handle_users(chat_id)
+                        elif text.startswith("/grant"):
+                            self._handle_grant(chat_id, text)
+                        elif text.startswith("/activate"):
+                            self._handle_toggle(chat_id, text, 1)
+                        elif text.startswith("/deactivate"):
+                            self._handle_toggle(chat_id, text, 0)
+                        elif text.startswith("/broadcast"):
+                            self._handle_broadcast(chat_id, text)
                         elif text == "/bulk":
                             self._handle_bulk_deals(chat_id)
                         elif text == "/upcoming":
@@ -123,9 +154,43 @@ class TelegramBot:
             f"<i>This automated engine is for INFORMATIONAL & EDUCATIONAL purposes only. "
             f"Content does not constitute financial, legal, or investment advice. "
             f"We are NOT SEBI Registered advisors. Trading carries substantial risk; "
-            f"please consult a certified professional before taking any action.</i>"
+            f"please consult a certified professional before taking any action.</i>\n\n"
         )
+        welcome_text += self._get_plan_menu()
         self._send_raw(chat_id, welcome_text)
+
+    def _get_plan_menu(self):
+        """Helper to return the structured plan menu text."""
+        return (
+            "💎 <b>PREMIUM PLANS (MARKET DAYS)</b>\n"
+            "<i>(Subscription only debits on trading days)</i>\n"
+            "────────────────────────\n"
+            "🔸 <b>Starter:</b> ₹99 (2 Market Days)\n"
+            "👉 /sub_99\n\n"
+            "🔹 <b>Growth:</b> ₹499 (7 Working Days)\n"
+            "👉 /sub_499\n\n"
+            "🚀 <b>Pro:</b> ₹999 (28 Working Days)\n"
+            "👉 /sub_999\n\n"
+            "🏆 <b>Institutional:</b> ₹5999 (336 Days)\n"
+            "👉 /sub_5999\n"
+            "────────────────────────\n"
+            "💡 Select a plan above to generate a secure link."
+        )
+
+    def _handle_subscribe_menu(self, chat_id):
+        """Displays available plans to the user."""
+        self._send_raw(chat_id, self._get_plan_menu())
+
+    def _send_expiry_reminder(self, chat_id):
+        """Sends a nudge to expired users."""
+        msg = (
+            "⚠️ <b>SUBSCRIPTION EXPIRED</b>\n"
+            "────────────────────────\n"
+            "Your Market-Day credits have been exhausted. "
+            "To continue receiving high-impact NSE signals and morning reports, please subscribe to a plan.\n\n"
+        )
+        msg += self._get_plan_menu()
+        self._send_raw(chat_id, msg)
 
     def _handle_login(self, chat_id, text):
         parts = text.split()
@@ -150,22 +215,114 @@ class TelegramBot:
         else:
             self._send_raw(chat_id, "No active admin session found.")
 
-    def _handle_status(self, chat_id):
         if not self.is_admin(chat_id):
             self._send_raw(chat_id, "🔒 <b>Session Expired or Unauthorized.</b>\nPlease use <code>/login <pass></code>")
             return
             
-        count = self.db.get_user_count() if self.db else 0
+        total, active = self.db.get_user_stats() if self.db else (0, 0)
         status_text = (
             f"📊 <b>SYSTEM STATUS</b>\n"
             f"────────────────────────\n"
             f"✅ <b>Signal Engine:</b> ACTIVE\n"
             f"🧠 <b>AI Processor:</b> ONLINE\n"
-            f"👥 <b>Total Synced Users:</b> {count}\n"
+            f"👥 <b>Total Users:</b> {total}\n"
+            f"⚡ <b>Active Subs:</b> {active or 0}\n"
             f"────────────────────────\n"
-            f"📍 <i>Server: Institutional v7.5</i>"
+            f"📍 <i>Server: Institutional v7.6</i>"
         )
         self._send_raw(chat_id, status_text)
+        
+    def _handle_users(self, chat_id):
+        if not self.is_admin(chat_id): return
+        users = self.db.get_all_users(limit=20)
+        
+        msg = "👥 <b>LATEST USERS (AUDIT)</b>\n"
+        msg += "<i>Click ID to copy for /grant</i>\n"
+        msg += "────────────────────────\n"
+        for u in users:
+            uid, name, uname, active, days = u
+            status = "✅" if active else "❌"
+            # Format: [Status] Name | ID | Days
+            msg += f"{status} {name or 'N/A'} (<code>{uid}</code>) | {days}d left\n"
+        
+        self._send_raw(chat_id, msg)
+
+    def _handle_me(self, chat_id, first_name):
+        """Shows the user their own information."""
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT is_active, working_days_left FROM users WHERE id = ?", (str(chat_id),))
+        user = cursor.fetchone()
+        
+        active_status = "✅ ACTIVE" if user and user[0] else "❌ INACTIVE"
+        days = user[1] if user else 0
+        
+        msg = (
+            f"👤 <b>USER PROFILE</b>\n"
+            f"────────────────────────\n"
+            f"👋 <b>Name:</b> {first_name}\n"
+            f"🆔 <b>My ID:</b> <code>{chat_id}</code>\n"
+            f"💎 <b>Status:</b> {active_status}\n"
+            f"⏳ <b>Market Days Left:</b> {days}\n"
+            f"────────────────────────\n"
+            f"💡 <i>Give this ID to Admin for manual support.</i>"
+        )
+        self._send_raw(chat_id, msg)
+
+    def _handle_grant(self, admin_chat_id, text):
+        """Manually grant subscription days to a user."""
+        if not self.is_admin(admin_chat_id): return
+        
+        parts = text.split()
+        if len(parts) < 3:
+            self._send_raw(admin_chat_id, "⚠️ Usage: <code>/grant <chat_id> <days></code>")
+            return
+            
+        target_id, days = parts[1], parts[2]
+        try:
+            days_int = int(days)
+            self.db.add_working_days(target_id, days_int)
+            self._send_raw(admin_chat_id, f"✅ <b>Granted {days_int} Market Days</b> to user <code>{target_id}</code>.")
+            logger.warning(f"ADMIN GRANT: {days_int} days to {target_id} by {admin_chat_id}")
+            
+            # Notify the user
+            self._send_raw(target_id, f"🎁 <b>Subscription Updated!</b>\nAdmin has manually credited your account with <b>{days_int} Market Days</b>. Enjoy premium signals!")
+        except ValueError:
+            self._send_raw(admin_chat_id, "❌ <i>Days</i> must be a number.")
+        except Exception as e:
+            logger.error(f"Manual grant failed: {e}")
+            self._send_raw(admin_chat_id, f"❌ Error: {str(e)}")
+
+    def _handle_toggle(self, admin_chat_id, text, active_val):
+        if not self.is_admin(admin_chat_id): return
+        parts = text.split()
+        if len(parts) < 2:
+            self._send_raw(admin_chat_id, f"⚠️ Usage: <code>/{ 'activate' if active_val else 'deactivate' } <chat_id></code>")
+            return
+        
+        target_id = parts[1]
+        self.db.toggle_user_status(target_id, active_val)
+        status_label = "ACTIVATED" if active_val else "DEACTIVATED"
+        self._send_raw(admin_chat_id, f"🎯 User <code>{target_id}</code> has been <b>{status_label}</b>.")
+        logger.info(f"ADMIN {status_label}: {target_id} by {admin_chat_id}")
+
+    def _handle_broadcast(self, chat_id, text):
+        if not self.is_admin(chat_id): return
+        parts = text.split(" ", 1)
+        if len(parts) < 2:
+            self._send_raw(chat_id, "⚠️ Usage: <code>/broadcast <message></code>")
+            return
+            
+        message = parts[1]
+        active_users = self.db.get_active_users()
+        
+        sent = 0
+        for uid in active_users:
+            try:
+                self._send_raw(uid, f"📢 <b>ADMIN BROADCAST</b>\n────────────────────────\n{message}")
+                sent += 1
+                time.sleep(0.05)
+            except: continue
+        self._send_raw(chat_id, f"✅ <b>Broadcast Sent!</b>\nDelivered to {sent} active subscribers.")
 
     def _handle_bulk_deals(self, chat_id):
         # Placeholder for real DB query from BulkDealSource
@@ -175,6 +332,64 @@ class TelegramBot:
     def _handle_upcoming(self, chat_id):
         msg = "🗓️ <b>Upcoming High-Impact Triggers</b>\n<i>Monitoring: Mergers, Splits & Dividend Record Dates.</i>"
         self._send_raw(chat_id, msg)
+
+    def _handle_subscribe_menu(self, chat_id):
+        """Displays available plans to the user."""
+        msg = (
+            "💎 <b>PREMIUM PLANS (MARKET DAYS)</b>\n"
+            "<i>(Subscription only debits on trading days)</i>\n"
+            "────────────────────────\n"
+            "🔸 <b>Starter:</b> ₹99 (2 Market Days)\n"
+            "👉 /sub_99\n\n"
+            "🔹 <b>Growth:</b> ₹499 (7 Working Days)\n"
+            "👉 /sub_499\n\n"
+            "🚀 <b>Pro:</b> ₹999 (28 Working Days)\n"
+            "👉 /sub_999\n\n"
+            "🏆 <b>Institutional:</b> ₹5999 (336 Days)\n"
+            "👉 /sub_5999\n"
+            "────────────────────────\n"
+            "💡 Select a plan above to generate a secure link."
+        )
+        self._send_raw(chat_id, msg)
+
+    def _handle_plan_selection(self, chat_id, text, first_name):
+        """Generates link for selected plan and saves for auto-verification."""
+        plan_type = text.replace("/sub_", "")
+        self._send_raw(chat_id, f"⌛ <b>Generating link for ₹{plan_type} plan...</b>")
+        
+        link_data = self.payment_processor.create_payment_link(chat_id, plan_type, first_name)
+        if link_data:
+            # RULE #24: Save for background poller
+            if self.db:
+                self.db.save_payment_link(link_data['id'], chat_id, link_data['days'])
+                
+            msg = (
+                f"🔗 <b>Your Payment Link is Ready:</b>\n{link_data['short_url']}\n\n"
+                f"⚡ <b>Auto-Activation:</b> Your premium access will be activated <b>automatically</b> "
+                f"within 1-2 minutes of payment. No further action needed!"
+            )
+            self._send_raw(chat_id, msg)
+        else:
+            self._send_raw(chat_id, "❌ Error generating link. Please try later.")
+
+    def _handle_check_payment(self, chat_id, text):
+        """Verifies and credits working days."""
+        parts = text.split()
+        if len(parts) < 2:
+            self._send_raw(chat_id, "⚠️ Usage: <code>/check_payment <link_id></code>")
+            return
+            
+        pl_id = parts[1]
+        self._send_raw(chat_id, "🔍 <b>Verifying transaction...</b>")
+        
+        days_to_add = self.payment_processor.verify_payment_status(pl_id)
+        if days_to_add:
+            # RULE #24: Credit Working Days
+            self.db.add_working_days(chat_id, days_to_add)
+            self._send_raw(chat_id, f"🎉 <b>Success! {days_to_add} Market Days credited.</b>\nYour premium access is now live.")
+            logger.info(f"USER PAID: {chat_id} | {days_to_add} days added via {pl_id}")
+        else:
+            self._send_raw(chat_id, "❌ Payment not found or pending.")
 
     def is_admin(self, chat_id):
         # Session valid for 5 minutes (300 seconds)
@@ -194,10 +409,11 @@ class TelegramBot:
             logger.error(f"Raw send failed: {e}")
 
     def send_report(self, report_text):
-        """Sends a structured pre-market report."""
-        if not self.token or not self.chat_ids: return
-
-        for chat_id in self.chat_ids:
+        """Sends a structured pre-market report to active users."""
+        if not self.token: return
+        
+        active_users = self.db.get_active_users() if self.db else self.chat_ids
+        for chat_id in active_users:
             payload = {
                 "chat_id": chat_id,
                 "text": report_text,
@@ -209,7 +425,7 @@ class TelegramBot:
                 requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=20)
             except Exception as e:
                 logger.error(f"Failed to send report to {chat_id}: {e}")
-        logger.info(f"Broadcasted report to {len(self.chat_ids)} users.")
+        logger.info(f"Broadcasted report to {len(active_users)} active users.")
 
     def send_alert(self, data):
         """Sends a high-precision market alert with SEBI disclaimer."""
@@ -238,7 +454,9 @@ class TelegramBot:
         )
 
         success = False
-        for chat_id in self.chat_ids:
+        active_users = self.db.get_active_users() if self.db else self.chat_ids
+        
+        for chat_id in active_users:
             payload = {
                 "chat_id": chat_id,
                 "text": message,

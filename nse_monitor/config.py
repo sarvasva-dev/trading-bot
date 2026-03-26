@@ -70,9 +70,8 @@ ALERT_THRESHOLD = 7
 MAX_ALERTS_PER_HOUR = 5
 
 # --- SYSTEM SETTINGS ---
-# Disable the scheduler for debugging/testing
-DISABLE_SCHEDULER = False
-
-# Maximum items to send to AI in one cycle (Rate Limiting)
-MAX_AI_PER_CYCLE = 20
-AI_COOLDOWN_SECONDS = 1
+# --- PAYMENT CONFIG (Razorpay) ---
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_placeholder")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "secret_placeholder")
+SUBSCRIPTION_PRICE_INR = int(os.getenv("SUBSCRIPTION_PRICE_INR", 499)) # Default ₹499
+SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", 30)) # Default 30 days

@@ -61,7 +61,7 @@ logger = logging.getLogger("NSEPulse")
 
 class MarketIntelligenceSystem:
     def __init__(self):
-        logger.info("Initializing Signal Engine v7.5...")
+        logger.info("Initializing Signal Engine v7.9.5 (Institutional Grade)...")
         self.db = Database()
         self.bot = TelegramBot(db=self.db)
         self.pdf_processor = PDFProcessor()
@@ -89,6 +89,78 @@ class MarketIntelligenceSystem:
         tz = pytz.timezone("Asia/Kolkata")
         now = datetime.now(tz)
         return 9 <= now.hour < 16 and now.weekday() < 5
+
+    def daily_maintenance(self):
+        """Runs at midnight IST to decrement market days and send reminders."""
+        now = datetime.now(self.ist)
+        # 1. Decrement credits (ONLY Mon-Fri)
+        if now.weekday() <= 4:
+            logger.info("Market Day Detected. Decrementing user credits...")
+            self.db.decrement_working_days()
+        else:
+            logger.info("Weekend Detected. Skipping subscription decrement.")
+
+        # 2. Send Expiry Reminders (Every day)
+        expired_users = self.db.get_expired_users()
+        if expired_users:
+            logger.info(f"Sending expiry reminders to {len(expired_users)} users...")
+            for chat_id in expired_users:
+                try:
+                    self.bot._send_expiry_reminder(chat_id)
+                except: continue
+
+    def check_pending_payments(self):
+        """Polls Razorpay for the status of pending links (Rule #24)."""
+        pending_links = self.db.get_pending_payment_links()
+        if not pending_links: return
+        
+        for pl_id, chat_id, days in pending_links:
+            try:
+                days_to_add = self.payment_processor.verify_payment_status(pl_id)
+                if days_to_add:
+                    # 1. Credit the user
+                    self.db.add_working_days(chat_id, days_to_add)
+                    # 2. Mark as processed
+                    self.db.update_payment_link_status(pl_id, 'processed')
+                    # 3. Notify user
+                    self.bot._send_raw(chat_id, f"✅ <b>Payment Successful!</b>\nWe've detected your transaction (Ref: <code>{pl_id}</code>). <b>{days_to_add} Market Days</b> have been added to your account. Enjoy!)")
+                    logger.warning(f"AUTO-PAYMENT SUCCESS: {chat_id} | +{days_to_add} days")
+                else:
+                    # Plan days might be 0 but status could be paid? 
+                    # verify_payment_status returns 'days' only if paid.
+                    pass
+            except Exception as e:
+                logger.error(f"Error during auto-payment check for {pl_id}: {e}")
+
+    def start(self):
+        """Initializes all polling and reporting jobs."""
+        logger.info(f"Initializing {BOT_NAME} Schedule (v1.0)...")
+        
+        # 1. Market Intel Polling (Every 3 Minutes)
+        self.scheduler.add_job(self.safe_run_cycle, 'interval', minutes=3, id='market_cycle')
+        
+        # 2. Daily Morning Report (08:30 AM IST)
+        self.scheduler.add_job(self.report_builder.generate_morning_report, 'cron', 
+                               hour=8, minute=30, id='morning_report', timezone=self.ist)
+        
+        # 3. User Message Polling (Every 1 Minute)
+        self.scheduler.add_job(self.bot.handle_updates, 'interval', minutes=1, id='bot_updates')
+
+        # 4. Midnight Maintenance (00:00 IST) - Rule #24
+        self.scheduler.add_job(self.daily_maintenance, 'cron', hour=0, minute=0, id='midnight_sync', timezone=self.ist)
+        
+        # 5. Auto-Payment Verification (Every 1 Minute) - Rule #24
+        self.scheduler.add_job(self.check_pending_payments, 'interval', minutes=1, id='payment_poller')
+
+        logger.info("Scheduler started (08:30 IST Reports | 1-Min Auto-Pay | 3-Min Polling).")
+        self.scheduler.start()
+
+    def safe_run_cycle(self):
+        """Wrapper for run_cycle to catch exceptions."""
+        try:
+            self.run_cycle()
+        except Exception as e:
+            logger.error(f"Error during scheduled run_cycle: {e}", exc_info=True)
 
     def run_cycle(self):
         """High-precision analysis cycle."""
@@ -154,7 +226,9 @@ class MarketIntelligenceSystem:
             item["db_id"] = self.db.add_news_item(item)
             new_items.append(item)
 
-        if not new_items: return False
+        if not new_items:
+            logger.info("📡 Scanning... No new institutional triggers found in this cycle.")
+            return False
 
         # 3. Processing
         processed_count = 0

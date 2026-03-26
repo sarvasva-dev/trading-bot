@@ -75,16 +75,35 @@ class Database:
                     id TEXT PRIMARY KEY,
                     first_name TEXT,
                     username TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    premium_until TIMESTAMP,
+                    working_days_left INTEGER DEFAULT 0,
+                    is_trial_used INTEGER DEFAULT 0,
                     registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            # Scheduled Events table (Upgraded Version)
+            # Migration check: Ensure new columns exist in legacy databases
+            try:
+                self.conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
+            except: pass 
+            try:
+                self.conn.execute("ALTER TABLE users ADD COLUMN premium_until TIMESTAMP")
+            except: pass
+            try:
+                self.conn.execute("ALTER TABLE users ADD COLUMN working_days_left INTEGER DEFAULT 0")
+            except: pass
+            try:
+                self.conn.execute("ALTER TABLE users ADD COLUMN is_trial_used INTEGER DEFAULT 0")
+            except: pass
+            
+            # Payment Links table (Rule #24 - Auto-Activation)
             self.conn.execute("""
-                CREATE TABLE IF NOT EXISTS scheduled_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_time TEXT,
-                    description TEXT,
+                CREATE TABLE IF NOT EXISTS payment_links (
+                    link_id TEXT PRIMARY KEY,
+                    chat_id TEXT,
+                    days INTEGER,
+                    status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -265,19 +284,75 @@ class Database:
                 (news_id,)
             )
 
-    def save_user(self, chat_id, first_name=None, username=None):
-        """Saves or updates a user in the permanent database."""
+    def save_user(self, chat_id, first_name, username):
+        """Saves a user and credits a 2-day free trial for first-time registrations."""
         with self.conn:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO users (id, first_name, username) VALUES (?, ?, ?)",
-                (str(chat_id), first_name, username)
-            )
+            # Check if user already exists
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, is_trial_used FROM users WHERE id = ?", (str(chat_id),))
+            user = cursor.fetchone()
+            
+            if not user:
+                # New user: Give 2 free market days
+                self.conn.execute("""
+                    INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active)
+                    VALUES (?, ?, ?, 2, 1, 1)
+                """, (str(chat_id), first_name, username))
+                return True # New registration
+            return False
 
     def get_user_count(self):
         """Returns the total number of unique users."""
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         return cursor.fetchone()[0]
+
+    def add_working_days(self, chat_id, days):
+        """Credits a user with Market Days and activates them."""
+        with self.conn:
+            self.conn.execute("""
+                UPDATE users 
+                SET working_days_left = working_days_left + ?, 
+                    is_active = 1 
+                WHERE id = ?
+            """, (days, str(chat_id)))
+
+    def decrement_working_days(self):
+        """Decrements 1 day from all active users (To be called on weekdays)."""
+        with self.conn:
+            # 1. Decrement days
+            self.conn.execute("UPDATE users SET working_days_left = working_days_left - 1 WHERE working_days_left > 0")
+            # 2. Deactivate users with 0 days left
+            self.conn.execute("UPDATE users SET is_active = 0 WHERE working_days_left <= 0")
+
+    def toggle_user_status(self, chat_id, active=1):
+        """Activates or deactivates a user's subscription."""
+        with self.conn:
+            self.conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (active, str(chat_id)))
+
+    def get_active_users(self):
+        """Fetches all users with an active subscription."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE is_active = 1")
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_expired_users(self):
+        """Fetches all users with 0 working days left for daily reminders."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE working_days_left <= 0")
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_user_stats(self):
+        """Returns total and active user counts."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*), SUM(is_active) FROM users")
+        return cursor.fetchone()
+
+    def get_all_users(self, limit=20):
+        """Fetches latest registered users with status."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, first_name, username, is_active, working_days_left FROM users ORDER BY registered_at DESC LIMIT ?", (limit,))
+        return cursor.fetchall()
 
     def get_recent_news(self, hours=24):
         """Fetches recent news items for AI deduplication."""
@@ -287,3 +362,22 @@ class Database:
             (f"-{hours} hours",)
         )
         return [{"id": row[0], "headline": row[1], "summary": row[2], "impact_score": row[3], "url": row[4], "source": row[5], "symbol": row[6]} for row in cursor.fetchall()]
+
+    def save_payment_link(self, link_id, chat_id, days):
+        """Stores a new payment link for background polling (Rule #24)."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO payment_links (link_id, chat_id, days, status) VALUES (?, ?, ?, 'pending')",
+                (link_id, str(chat_id), days)
+            )
+
+    def get_pending_payment_links(self):
+        """Fetches all links that haven't been confirmed as paid yet."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT link_id, chat_id, days FROM payment_links WHERE status = 'pending'")
+        return cursor.fetchall()
+
+    def update_payment_link_status(self, link_id, status):
+        """Updates the status of a payment link (e.g., 'paid', 'expired')."""
+        with self.conn:
+            self.conn.execute("UPDATE payment_links SET status = ? WHERE link_id = ?", (status, link_id))
