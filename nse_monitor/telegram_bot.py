@@ -136,7 +136,7 @@ class TelegramBot:
         provided_password = parts[1]
         if provided_password == ADMIN_PASSWORD:
             self.admin_sessions[str(chat_id)] = time.time()
-            self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b>\nYou now have elevated privileges for this session.")
+            self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b>\nAccess is granted for <b>5 minutes</b>. Use /logout to exit early.")
             logger.warning(f"ADMIN LOGIN: {chat_id}")
         else:
             self._send_raw(chat_id, "🚫 <b>Invalid Password.</b> Access Denied.")
@@ -177,9 +177,9 @@ class TelegramBot:
         self._send_raw(chat_id, msg)
 
     def is_admin(self, chat_id):
-        # Session valid for 4 hours
+        # Session valid for 5 minutes (300 seconds)
         session_time = self.admin_sessions.get(str(chat_id), 0)
-        return (time.time() - session_time) < 14400
+        return (time.time() - session_time) < 300
 
     def _send_raw(self, chat_id, text):
         payload = {

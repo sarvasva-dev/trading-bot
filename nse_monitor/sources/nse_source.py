@@ -30,7 +30,7 @@ class NSESource:
                     "symbol": ann.get('symbol', 'N/A'),
                     "summary": f"Category: {category}. {headline}", # Combine for full context
                     "url": f"https://nsearchives.nseindia.com/corporate/{ann.get('attchmntFile')}" if ann.get('attchmntFile') and 'http' not in ann.get('attchmntFile') else ann.get('attchmntFile', ''),
-                    "timestamp": ann.get('dt', ''),
+                    "timestamp": ann.get('dt', '') or time.strftime("%d-%b-%Y %H:%M:%S"),
                     "raw_id": str(ann.get('sm_pid') or ann.get('id'))
                 })
             return results

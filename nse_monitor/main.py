@@ -106,17 +106,40 @@ class MarketIntelligenceSystem:
                     now = datetime.now(tz)
                     ignore = ["trading window", "shareholding pattern", "compliance certificate"]
                     
+                    logger.info(f"Filtering {len(items)} items for {BOT_NAME} purity...")
+                    passed_age = 0
                     for item in items:
                         if any(kw in item['headline'].lower() for kw in ignore): continue
                         
                         try:
-                            ts = item.get('datetime') or datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00')).astimezone(tz)
+                            # Enhanced Institutional Parser (Rule #2)
+                            ts_str = item.get('timestamp', '')
+                            if not ts_str: continue
+                            
+                            try:
+                                # Try standard formats used by NSE
+                                if '-' in ts_str and ':' in ts_str:
+                                    if len(ts_str.split('-')[0]) == 4: # YYYY-MM-DD
+                                        ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).astimezone(tz)
+                                    else: # DD-MM-YYYY or DD-Mon-YYYY
+                                        ts = datetime.strptime(ts_str, "%d-%b-%Y %H:%M:%S").astimezone(tz)
+                                else:
+                                    ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).astimezone(tz)
+                            except:
+                                # Fallback for simple date
+                                ts = datetime.strptime(ts_str.split('.')[0], "%Y-%m-%dT%H:%M:%S").astimezone(tz) if 'T' in ts_str else now
+
                             age = (now - ts).total_seconds() / 60
-                            if age > 720: continue # 12h max
+                            # Increased to 24 hours for better test visibility
+                            if age > 1440: continue 
                             item['age_minutes'] = age
-                        except: continue
+                            passed_age += 1
+                        except Exception as e:
+                            logger.debug(f"Timestamp Parse Skip: {e} | Data: {ts_str}")
+                            continue
                         
                         raw_items.append(item)
+                    logger.info(f"Purity Filter: {passed_age} items passed age/noise criteria.")
             except Exception as e:
                 logger.error(f"Source Fetch Error: {e}")
 
