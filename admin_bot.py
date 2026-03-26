@@ -152,7 +152,7 @@ class AdminPanel:
     def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"📊 <b>PRODUCTION STATUS (v9.0)</b>\n"
+            f"📊 <b>PRODUCTION STATUS (v9.1)</b>\n"
             f"────────────────────────\n"
             f"✅ <b>Signal Engine:</b> ACTIVE\n"
             f"🧠 <b>AI Processor:</b> ONLINE\n\n"

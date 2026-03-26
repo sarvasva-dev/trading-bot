@@ -371,6 +371,12 @@ class Database:
         cursor.execute("SELECT id, first_name, username, is_active, working_days_left FROM users ORDER BY registered_at DESC LIMIT ?", (limit,))
         return cursor.fetchall()
 
+    def get_user(self, chat_id):
+        """Fetches a single user's detailed status (Rule #24)."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, first_name, username, is_active, working_days_left FROM users WHERE id = ?", (str(chat_id),))
+        return cursor.fetchone()
+
     def get_recent_news(self, hours=24):
         """Fetches recent news items for AI deduplication."""
         cursor = self.conn.cursor()
