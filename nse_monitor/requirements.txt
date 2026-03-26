@@ -10,3 +10,4 @@ PyMuPDF
 scikit-learn
 numpy
 pytest
+razorpay
