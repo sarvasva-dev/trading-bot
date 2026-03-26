@@ -294,6 +294,7 @@ class Database:
             
             if not user:
                 # New user: Give 2 free market days
+                logger.info(f"🆕 NEW USER REGISTERED: {first_name} ({chat_id}) | Credited 2-day trial.")
                 self.conn.execute("""
                     INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active)
                     VALUES (?, ?, ?, 2, 1, 1)
@@ -308,8 +309,15 @@ class Database:
         return cursor.fetchone()[0]
 
     def add_working_days(self, chat_id, days):
-        """Credits a user with Market Days and activates them."""
+        """Credits a user with Market Days and activates them (UPSERT)."""
         with self.conn:
+            # First, ensure user exists (fallback registration)
+            self.conn.execute("""
+                INSERT OR IGNORE INTO users (id, first_name, username, is_active, working_days_left)
+                VALUES (?, 'Manual', 'manual_entry', 1, 0)
+            """, (str(chat_id),))
+            
+            # Then update days
             self.conn.execute("""
                 UPDATE users 
                 SET working_days_left = working_days_left + ?, 

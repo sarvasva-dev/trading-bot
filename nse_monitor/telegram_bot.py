@@ -116,7 +116,20 @@ class TelegramBot:
                         elif text == "/upcoming":
                             self._handle_upcoming(chat_id)
                         elif text == "/admin":
-                            self._send_raw(chat_id, "🔐 <b>Admin Panel has moved!</b>\nPlease use the dedicated Admin Bot for administrative actions.")
+                            self._send_raw(chat_id, "🔐 <b>Admin Dashboard (Interactive)</b>\nPlease use the dedicated Admin Bot for button-based controls.")
+                        
+                        # 👑 OWNER-ONLY FALLBACK COMMANDS (Rule #24)
+                        elif str(chat_id) == os.getenv("TELEGRAM_ADMIN_CHAT_ID"):
+                            if text.startswith("/grant"):
+                                parts = text.split()
+                                if len(parts) >= 3:
+                                    target, days = parts[1], parts[2]
+                                    self.db.add_working_days(target, int(days))
+                                    self.db.toggle_user_status(target, 1)
+                                    self._send_raw(chat_id, f"✅ User {target} granted {days} days.")
+                            elif text == "/users":
+                                stats = self.db.get_user_stats()
+                                self._send_raw(chat_id, f"👥 Total: {stats[0]} | Active: {stats[1]}")
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")

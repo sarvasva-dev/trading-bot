@@ -227,7 +227,7 @@ class MarketIntelligenceSystem:
             new_items.append(item)
 
         if not new_items:
-            logger.info("📡 Scanning... No new institutional triggers found in this cycle.")
+            logger.info(f"📡 Scanning... {len(raw_items)} NSE items evaluated. No new institutional triggers in this cycle.")
             return False
 
         # 3. Processing
