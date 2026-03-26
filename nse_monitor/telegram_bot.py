@@ -61,6 +61,7 @@ class TelegramBot:
         commands = [
             {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
             {"command": "login", "description": "Admin Authentication (Password Required)"},
+            {"command": "status", "description": "Admin: System & User Stats"},
             {"command": "bulk", "description": "Latest Bulk/Block Deal Intel"},
             {"command": "upcoming", "description": "Upcoming Corporate Actions"}
         ]
@@ -98,6 +99,8 @@ class TelegramBot:
                             self._send_welcome(chat_id, first_name)
                         elif text.startswith("/login"):
                             self._handle_login(chat_id, text)
+                        elif text == "/status":
+                            self._handle_status(chat_id)
                         elif text == "/bulk":
                             self._handle_bulk_deals(chat_id)
                         elif text == "/upcoming":
@@ -108,15 +111,17 @@ class TelegramBot:
 
     def _send_welcome(self, chat_id, first_name):
         welcome_text = (
-            f"🚀 <b>{BOT_NAME} v7.5 Online</b>\n\n"
+            f"🚀 <b>{BOT_NAME} Online</b>\n\n"
             f"Hello {first_name}! I am your high-precision NSE intelligence engine.\n\n"
             f"<b>Core Capabilities:</b>\n"
-            f"• Direct NSE Corporate Filing Analysis\n"
-            f"• Real-time high-impact triggers (>7 Score)\n"
+            f"• Direct Institutional Corporate Filings\n"
+            f"• Real-time high-impact signals (>7 Score)\n"
             f"• Bulk/Block Deal intelligence\n\n"
-            f"⚠️ <b>LEGAL DISCLAIMER:</b>\n"
-            f"<i>This bot is for EDUCATIONAL PURPOSES only. Content does not constitute investment advice. "
-            f"We are NOT SEBI Registered advisors. Trading carries high risk.</i>"
+            f"⚖️ <b>SEBI DISCLAIMER:</b>\n"
+            f"<i>This automated engine is for INFORMATIONAL & EDUCATIONAL purposes only. "
+            f"Content does not constitute financial, legal, or investment advice. "
+            f"We are NOT SEBI Registered advisors. Trading carries substantial risk; "
+            f"please consult a certified professional before taking any action.</i>"
         )
         self._send_raw(chat_id, welcome_text)
 
@@ -128,12 +133,29 @@ class TelegramBot:
             
         provided_password = parts[1]
         if provided_password == ADMIN_PASSWORD:
-            self.admin_sessions[chat_id] = time.time()
+            self.admin_sessions[str(chat_id)] = time.time()
             self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b>\nYou now have elevated privileges for this session.")
             logger.warning(f"ADMIN LOGIN: {chat_id}")
         else:
             self._send_raw(chat_id, "🚫 <b>Invalid Password.</b> Access Denied.")
             logger.error(f"FAILED LOGIN ATTEMPT: {chat_id}")
+
+    def _handle_status(self, chat_id):
+        if not self.is_admin(chat_id):
+            self._send_raw(chat_id, "🔒 <b>Session Expired or Unauthorized.</b>\nPlease use <code>/login <pass></code>")
+            return
+            
+        count = self.db.get_user_count() if self.db else 0
+        status_text = (
+            f"📊 <b>SYSTEM STATUS</b>\n"
+            f"────────────────────────\n"
+            f"✅ <b>Signal Engine:</b> ACTIVE\n"
+            f"🧠 <b>AI Processor:</b> ONLINE\n"
+            f"👥 <b>Total Synced Users:</b> {count}\n"
+            f"────────────────────────\n"
+            f"📍 <i>Server: Institutional v7.5</i>"
+        )
+        self._send_raw(chat_id, status_text)
 
     def _handle_bulk_deals(self, chat_id):
         # Placeholder for real DB query from BulkDealSource

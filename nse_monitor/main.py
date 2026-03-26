@@ -72,6 +72,7 @@ class MarketIntelligenceSystem:
         self.sources = [NSESource()]
         
         # RULE #18: Threaded Telegram Handler
+        self.bot.register_menu_commands()
         self.update_thread = threading.Thread(target=self._update_polling_loop, daemon=True)
         self.update_thread.start()
 
