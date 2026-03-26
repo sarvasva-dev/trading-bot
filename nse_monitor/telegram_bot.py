@@ -98,7 +98,9 @@ class TelegramBot:
                                 self._send_raw(chat_id, "🎁 <b>Welcome Offer Activated!</b>\nYou've been credited with <b>2 Free Market Days</b> as a first-time user. Signals start now!")
                                 logger.info(f"New User Registered + Trial: {first_name} (@{username}) | ID: {chat_id}")
                             else:
-                                logger.info(f"Existing User Re-synced: {first_name} | ID: {chat_id}")
+                                username = update["message"]["from"].get("username", "Unknown")
+                                self.db.sync_user(chat_id, first_name, username)
+                                logger.info(f"Existing User Re-synced: {first_name} (@{username}) | ID: {chat_id}")
 
                         # 2. Command Router
                         if text == "/start":

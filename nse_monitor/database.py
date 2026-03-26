@@ -338,6 +338,15 @@ class Database:
         with self.conn:
             self.conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (active, str(chat_id)))
 
+    def sync_user(self, chat_id, first_name, username):
+        """Updates user's name/username to keep database fresh (Rule #24)."""
+        with self.conn:
+            self.conn.execute("""
+                UPDATE users 
+                SET first_name = ?, username = ? 
+                WHERE id = ?
+            """, (first_name, username, str(chat_id)))
+
     def get_active_users(self):
         """Fetches all users with an active subscription."""
         cursor = self.conn.cursor()
