@@ -442,13 +442,16 @@ class TelegramBot:
         session_time = self.admin_sessions.get(str(chat_id), 0)
         return (time.time() - session_time) < 300
 
-    def _send_raw(self, chat_id, text):
+    def _send_raw(self, chat_id, text, reply_markup=None):
         payload = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "protect_content": True # RULE #23: Prevent forwarding
+            "protect_content": True
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+            
         try:
             requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
         except Exception as e:
