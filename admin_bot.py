@@ -124,6 +124,18 @@ class AdminPanel:
             self._handle_list(chat_id)
         elif data == "menu_broadcast":
             self._send(chat_id, "📢 Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+        elif data.startswith("manage_"):
+            uid = data.split("_")[1]
+            self._show_manage_menu(chat_id, uid)
+        elif data.startswith("reset_"):
+            uid = data.split("_")[1]
+            self._execute_reset(chat_id, uid)
+        elif data.startswith("plans_"):
+            uid = data.split("_")[1]
+            self._show_plan_options(chat_id, uid)
+        elif data.startswith("grant_"):
+            _, uid, days = data.split("_")
+            self._execute_grant_interactive(chat_id, uid, int(days))
         
         self._answer_callback(cb["id"])
 
@@ -152,7 +164,7 @@ class AdminPanel:
     def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"📊 <b>PRODUCTION STATUS (v10.3)</b>\n"
+            f"📊 <b>PRODUCTION STATUS (v11.0)</b>\n"
             f"────────────────────────\n"
             f"✅ <b>Signal Engine:</b> ACTIVE\n"
             f"🧠 <b>AI Processor:</b> ONLINE\n\n"
@@ -164,32 +176,87 @@ class AdminPanel:
         self._send(chat_id, text)
 
     def _handle_list(self, chat_id):
-        """Highly detailed user audit list (v8.7)."""
-        users = self.db.get_all_users(limit=50)
+        """Highly detailed user audit list with action buttons (v11.0)."""
+        users = self.db.get_all_users(limit=10) # Reduced limit for button safety
         text = "📋 <b>INSTITUTIONAL USER AUDIT</b>\n────────────────────────\n"
+        
+        keyboard = {"inline_keyboard": []}
         
         for u in users:
             uid, name, uname, active, days = u
             username_safe = f"(@{uname})" if uname and uname != "manual_entry" else ""
-            status_text = "ACTIVE" if active else "OFF"
             icon = "💎" if active else "🆓"
             
-            # Estimate Plan Logic
             plan_name = "Trial"
             if days >= 336: plan_name = "Insti"
             elif days >= 28: plan_name = "Pro"
             elif days >= 7: plan_name = "Grth"
             elif days >= 2: plan_name = "Star"
             
-            text += f"{icon} <b>{name}</b> {username_safe} [<code>{uid}</code>]\n"
-            text += f"   └ Status: {status_text} | Bal: <b>{days}d</b> ({plan_name})\n\n"
+            text += f"{icon} {name} [<code>{uid}</code>] | <b>{days}d</b>\n"
+            keyboard["inline_keyboard"].append([{"text": f"⚙️ Manage {name}", "callback_data": f"manage_{uid}"}])
         
         if not users:
             text += "<i>No users found in database.</i>"
             
         text += "────────────────────────\n"
-        text += "💡 <i>Use /grant &lt;id&gt; &lt;days&gt; to credit.</i>"
-        self._send(chat_id, text)
+        text += "💡 <i>Click 'Manage' to Reset or Grant Plans.</i>"
+        self._send(chat_id, text, keyboard)
+
+    def _show_manage_menu(self, chat_id, uid):
+        user = self.db.get_user(uid)
+        if not user: return
+        
+        name = user[1]
+        text = (
+            f"⚙️ <b>MANAGE USER:</b> {name}\n"
+            f"🆔 <b>ID:</b> <code>{uid}</code>\n"
+            f"⏳ <b>Current Balance:</b> {user[4]} days\n"
+            f"────────────────────────\n"
+            f"Select an action to perform:"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔄 Reset to 0 Days", "callback_data": f"reset_{uid}"}],
+                [{"text": "➕ Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
+                [{"text": "🔙 Back to List", "callback_data": "menu_list"}]
+            ]
+        }
+        self._send(chat_id, text, keyboard)
+
+    def _show_plan_options(self, chat_id, uid):
+        text = f"➕ <b>SELECT PLAN TO GRANT:</b>\nGrant days to user <code>{uid}</code> instantly."
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔸 Star Plan (+2d)", "callback_data": f"grant_{uid}_2"}],
+                [{"text": "🔹 Growth Plan (+7d)", "callback_data": f"grant_{uid}_7"}],
+                [{"text": "🚀 Professional (+28d)", "callback_data": f"grant_{uid}_28"}],
+                [{"text": "🏆 Institutional (+336d)", "callback_data": f"grant_{uid}_336"}],
+                [{"text": "🔙 Back", "callback_data": f"manage_{uid}"}]
+            ]
+        }
+        self._send(chat_id, text, keyboard)
+
+    def _execute_reset(self, chat_id, uid):
+        self.db.reset_user_days(uid)
+        self._send(chat_id, f"✅ <b>Action Complete:</b> User <code>{uid}</code> balance reset to 0.")
+        # Optional: Notify user? Or just keep it silent.
+        self._show_manage_menu(chat_id, uid)
+
+    def _execute_grant_interactive(self, chat_id, uid, days):
+        self.db.add_working_days(uid, days)
+        self.db.toggle_user_status(uid, 1)
+        self._send(chat_id, f"✅ <b>Success:</b> Granted {days} days to <code>{uid}</code>.")
+        
+        # 🔔 Notify Target User via Signal Bot
+        msg = (
+            f"🎁 <b>Manual Account Activation!</b>\n"
+            f"────────────────────────\n"
+            f"The Administrator has credited your account with <b>{days} Market Days</b>.\n\n"
+            f"Your professional intelligence engine is now <b>LIVE</b> and scanning for NSE signals. 📈"
+        )
+        self._notify_user_via_signal_bot(uid, msg)
+        self._show_manage_menu(chat_id, uid)
 
     def _handle_users(self, chat_id):
         users = self.db.get_all_users(limit=15)

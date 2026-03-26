@@ -347,6 +347,11 @@ class Database:
                 WHERE id = ?
             """, (first_name, username, str(chat_id)))
 
+    def reset_user_days(self, chat_id):
+        """Sets a user's working days to 0 and deactivates them (Rule #24)."""
+        with self.conn:
+            self.conn.execute("UPDATE users SET working_days_left = 0, is_active = 0 WHERE id = ?", (str(chat_id),))
+
     def get_active_users(self):
         """Fetches all users with an active subscription."""
         cursor = self.conn.cursor()
