@@ -1,11 +1,16 @@
-import logging
-import os
-import time
-import requests
+import pytz
+from datetime import datetime
 from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD
 
 # Secure Admin Bot with /login Auth
-logging.basicConfig(level=logging.INFO)
+def ist_time(*args):
+    return datetime.now(pytz.timezone('Asia/Kolkata')).timetuple()
+
+logging.Formatter.converter = ist_time
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("NSEAdmin")
 
 class AdminBot:

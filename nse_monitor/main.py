@@ -46,6 +46,11 @@ from nse_monitor.pdf_processor import PDFProcessor
 from nse_monitor.llm_processor import LLMProcessor
 
 # Logging Setup
+def ist_time(*args):
+    return datetime.now(pytz.timezone('Asia/Kolkata')).timetuple()
+
+logging.Formatter.converter = ist_time
+
 os.makedirs(LOGS_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -92,7 +97,8 @@ class MarketIntelligenceSystem:
         raw_items = []
         for source in self.sources:
             try:
-                items = source.get_announcements()
+                # Fixed: Use .fetch() instead of .get_announcements()
+                items = source.fetch()
                 if items:
                     # RULE #3 & #6: Strict Filtering
                     tz = pytz.timezone("Asia/Kolkata")
