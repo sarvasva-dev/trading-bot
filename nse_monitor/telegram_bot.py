@@ -63,15 +63,7 @@ class TelegramBot:
         commands = [
             {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
             {"command": "subscribe", "description": "Get Premium Access (Razorpay Link)"},
-            {"command": "me", "description": "Show My ID & Subscription Balance"},
-            {"command": "check_payment", "description": "Verify & Activate Premium <link_id>"},
-            {"command": "login", "description": "Admin Authentication (Password Required)"},
-            {"command": "status", "description": "Admin: System & User Stats"},
-            {"command": "grant", "description": "Admin: Grant Days <id> <days>"},
-            {"command": "activate", "description": "Admin: Activate User <id>"},
-            {"command": "deactivate", "description": "Admin: Disable User <id>"},
-            {"command": "users", "description": "Admin: List Users (Audit)"},
-            {"command": "broadcast", "description": "Admin: Mass Notify Active Users"}
+            {"command": "me", "description": "Show My ID & Subscription Balance"}
         ]
         try:
             requests.post(url, json={"commands": commands}, timeout=10)
@@ -119,25 +111,12 @@ class TelegramBot:
                             self._handle_plan_selection(chat_id, text, first_name)
                         elif text.startswith("/check_payment"):
                             self._handle_check_payment(chat_id, text)
-                        elif text.startswith("/login"):
-                            self._handle_login(chat_id, text)
-                        elif text == "/logout":
-                            self._handle_logout(chat_id)
-                        elif text == "/status":
-                            self._handle_status(chat_id)
-                        elif text == "/users":
-                            self._handle_users(chat_id)
-                        elif text.startswith("/grant"):
-                            self._handle_grant(chat_id, text)
-                        elif text.startswith("/activate"):
-                            self._handle_toggle(chat_id, text, 1)
-                        elif text.startswith("/deactivate"):
-                            self._handle_toggle(chat_id, text, 0)
-                        elif text.startswith("/broadcast"):
-                            self._handle_broadcast(chat_id, text)
                         elif text == "/bulk":
                             self._handle_bulk_deals(chat_id)
                         elif text == "/upcoming":
+                            self._handle_upcoming(chat_id)
+                        elif text == "/admin":
+                            self._send_raw(chat_id, "🔐 <b>Admin Panel has moved!</b>\nPlease use the dedicated Admin Bot for administrative actions.")
                             self._handle_upcoming(chat_id)
 
         except Exception as e:
@@ -161,22 +140,30 @@ class TelegramBot:
         self._send_raw(chat_id, welcome_text)
 
     def _get_plan_menu(self):
-        """Helper to return the structured plan menu text."""
-        return (
+        """Helper to return the structured plan menu text (Dynamic v8.2)."""
+        from nse_monitor.config import SUBSCRIPTION_PLANS
+        
+        msg = (
             "💎 <b>PREMIUM PLANS (MARKET DAYS)</b>\n"
             "<i>(Subscription only debits on trading days)</i>\n"
             "────────────────────────\n"
-            "🔸 <b>Starter:</b> ₹99 (2 Market Days)\n"
-            "👉 /sub_99\n\n"
-            "🔹 <b>Growth:</b> ₹499 (7 Working Days)\n"
-            "👉 /sub_499\n\n"
-            "🚀 <b>Pro:</b> ₹999 (28 Working Days)\n"
-            "👉 /sub_999\n\n"
-            "🏆 <b>Institutional:</b> ₹5999 (336 Days)\n"
-            "👉 /sub_5999\n"
-            "────────────────────────\n"
-            "💡 Select a plan above to generate a secure link."
         )
+        
+        # Order by price low to high
+        sorted_keys = sorted(SUBSCRIPTION_PLANS.keys(), key=lambda x: int(x))
+        for k in sorted_keys:
+            plan = SUBSCRIPTION_PLANS[k]
+            price = plan["amount"]
+            days = plan["days"]
+            label = "Working Days" if days > 2 else "Market Days"
+            if days >= 336: label = "Year"
+            
+            msg += f"🔸 <b>Plan:</b> ₹{price} ({days} {label})\n"
+            msg += f"👉 /sub_{price}\n\n"
+        
+        msg += "────────────────────────\n"
+        msg += "💡 Select a plan above to generate a secure link."
+        return msg
 
     def _handle_subscribe_menu(self, chat_id):
         """Displays available plans to the user."""

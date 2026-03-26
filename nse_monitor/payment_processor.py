@@ -1,7 +1,7 @@
 import razorpay
 import logging
 from datetime import datetime, timedelta
-from nse_monitor.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, SUBSCRIPTION_PRICE_INR, SUBSCRIPTION_DAYS
+from nse_monitor.config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, SUBSCRIPTION_PLANS
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +17,11 @@ class RazorpayProcessor:
         """Generates a Razorpay Payment Link for a specific plan."""
         if not self.client: return None
         
-        # Determine amount and credit days
-        plans = {
-            "99": {"amount": 99, "days": 2, "label": "2 Market Days"},
-            "499": {"amount": 499, "days": 7, "label": "7 Working Days"},
-            "999": {"amount": 999, "days": 28, "label": "28 Working Days"},
-            "5999": {"amount": 5999, "days": 336, "label": "1 Year (336 Days)"}
-        }
-        
-        plan = plans.get(str(plan_type))
-        if not plan: return None
+        # RULE #24: Safe dynamic plan fetch
+        plan = SUBSCRIPTION_PLANS.get(str(plan_type))
+        if not plan: 
+            logger.error(f"Invalid plan type requested: {plan_type}")
+            return None
         
         try:
             payload = {

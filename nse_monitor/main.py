@@ -61,7 +61,7 @@ logger = logging.getLogger("NSEPulse")
 
 class MarketIntelligenceSystem:
     def __init__(self):
-        logger.info("Initializing Signal Engine v7.9.7 (Institutional Stable)...")
+        logger.info("Initializing Signal Engine v8.2 (Dynamic Stable)...")
         self.db = Database()
         self.bot = TelegramBot(db=self.db)
         self.pdf_processor = PDFProcessor()
@@ -292,6 +292,18 @@ def main():
     try:
         check_single_instance()
         system = MarketIntelligenceSystem()
+        
+        # 🟢 Start Admin Dashboard Bot (v8.0)
+        try:
+            from admin_bot import AdminPanel
+            admin_p = AdminPanel()
+            import threading
+            admin_thread = threading.Thread(target=admin_p.run, daemon=True)
+            admin_thread.start()
+            logger.info("Admin Dashboard Bot started (Parallel Thread).")
+        except Exception as e:
+            logger.error(f"Failed to start Admin Bot: {e}")
+
         from nse_monitor.scheduler import MarketScheduler
         scheduler = MarketScheduler(system)
         system.run_cycle()
