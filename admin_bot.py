@@ -97,6 +97,8 @@ class AdminPanel:
         # 3. Command Router
         if text == "/start" or text == "/admin":
             self._send_main_menu(chat_id)
+        elif text == "/list":
+            self._handle_list(chat_id)
         elif text == "/status":
             self._handle_status(chat_id)
         elif text == "/users":
@@ -117,26 +119,30 @@ class AdminPanel:
 
         if data == "menu_status":
             self._handle_status(chat_id)
-        elif data == "menu_users":
-            self._handle_users(chat_id)
+        elif data == "menu_list" or data == "menu_users":
+            self._handle_list(chat_id)
         elif data == "menu_broadcast":
-            self._send(chat_id, "📢 Usage: <code>/broadcast <message></code>\nThis will notify ALL active subscribers.")
-        elif data.startswith("user_info_"):
-            uid = data.replace("user_info_", "")
-            self._show_user_details(chat_id, uid)
+            self._send(chat_id, "📢 Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
         
         self._answer_callback(cb["id"])
 
     def _send_main_menu(self, chat_id):
         text = (
-            f"🛠️ <b>{BOT_NAME} Admin Dashboard</b>\n"
+            f"🛠️ <b>{BOT_NAME} ADMIN GUIDE (v8.7)</b>\n"
             f"────────────────────────\n"
-            f"Welcome master. Select an action below:"
+            f"<b>Commands:</b>\n"
+            f"• <code>/list</code> — Full User Audit Log\n"
+            f"• <code>/grant &lt;id&gt; &lt;days&gt;</code> — Manual Credit\n"
+            f"• <code>/broadcast &lt;msg&gt;</code> — Global Alert\n"
+            f"• <code>/status</code> — System Health Check\n\n"
+            f"<b>Key Indicators:</b>\n"
+            f"💎 = Active Premium | 🆓 = Free/Trial\n\n"
+            f"Select an action below for quick access:"
         )
         keyboard = {
             "inline_keyboard": [
                 [{"text": "📊 System Status", "callback_data": "menu_status"}],
-                [{"text": "👥 User Audit", "callback_data": "menu_users"}],
+                [{"text": "📋 Full User List", "callback_data": "menu_list"}],
                 [{"text": "📢 Mass Broadcast", "callback_data": "menu_broadcast"}]
             ]
         }
@@ -145,15 +151,43 @@ class AdminPanel:
     def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"📊 <b>PRODUCTION STATUS</b>\n"
+            f"📊 <b>PRODUCTION STATUS (v8.7)</b>\n"
             f"────────────────────────\n"
             f"✅ <b>Signal Engine:</b> ACTIVE\n"
             f"🧠 <b>AI Processor:</b> ONLINE\n\n"
             f"👥 <b>Total Users:</b> {total}\n"
             f"⚡ <b>Active Subs:</b> {active}\n"
             f"────────────────────────\n"
-            f"📍 <i>Build: v8.6 Institutional Prime</i>"
+            f"📍 <i>Build: Institutional Prime</i>"
         )
+        self._send(chat_id, text)
+
+    def _handle_list(self, chat_id):
+        """Highly detailed user audit list (v8.7)."""
+        users = self.db.get_all_users(limit=50)
+        text = "📋 <b>INSTITUTIONAL USER AUDIT</b>\n────────────────────────\n"
+        
+        for u in users:
+            uid, name, uname, active, days = u
+            username_safe = f"(@{uname})" if uname and uname != "manual_entry" else ""
+            status_text = "ACTIVE" if active else "OFF"
+            icon = "💎" if active else "🆓"
+            
+            # Estimate Plan Logic
+            plan_name = "Trial"
+            if days >= 336: plan_name = "Insti"
+            elif days >= 28: plan_name = "Pro"
+            elif days >= 7: plan_name = "Grth"
+            elif days >= 2: plan_name = "Star"
+            
+            text += f"{icon} <b>{name}</b> {username_safe} [<code>{uid}</code>]\n"
+            text += f"   └ Status: {status_text} | Bal: <b>{days}d</b> ({plan_name})\n\n"
+        
+        if not users:
+            text += "<i>No users found in database.</i>"
+            
+        text += "────────────────────────\n"
+        text += "💡 <i>Use /grant &lt;id&gt; &lt;days&gt; to credit.</i>"
         self._send(chat_id, text)
 
     def _handle_users(self, chat_id):
