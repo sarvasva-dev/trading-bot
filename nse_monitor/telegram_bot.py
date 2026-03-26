@@ -4,44 +4,73 @@ import time
 import html
 import os
 import json
-from nse_monitor.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, BOT_NAME
+from nse_monitor.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, BOT_NAME, ADMIN_PASSWORD
 
 logger = logging.getLogger(__name__)
 
 class TelegramBot:
-    def __init__(self):
+    def __init__(self, db=None):
         self.token = TELEGRAM_BOT_TOKEN
-        # Ensure we always work with strings for consistent deduplication
         self.chat_ids = [str(cid) for cid in TELEGRAM_CHAT_IDS] if TELEGRAM_CHAT_IDS else []
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.last_update_id = 0
+        self.db = db
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
+        self.admin_sessions = {} # chat_id: timestamp
         self._load_dynamic_ids()
+        self._sync_with_db()
 
     def _load_dynamic_ids(self):
+        """Loads IDs from JSON storage."""
         if os.path.exists(self.dynamic_ids_file):
             try:
                 with open(self.dynamic_ids_file, "r") as f:
-                    extra_ids = json.load(f)
+                    data = json.load(f)
+                    extra_ids = data if isinstance(data, list) else data.get("ids", [])
                     for cid in extra_ids:
-                        # Convert to string before checking/adding
                         cid_str = str(cid)
                         if cid_str not in self.chat_ids:
                             self.chat_ids.append(cid_str)
             except Exception as e:
                 logger.error(f"Error loading dynamic chat IDs: {e}")
 
-    def _save_dynamic_ids(self):
+    def _sync_with_db(self):
+        """Ensures all JSON IDs are also persisted in the SQLite users table."""
+        if not self.db: return
+        logger.info("Syncing User Database...")
+        for chat_id in self.chat_ids:
+            self.db.save_user(chat_id, "Sync_Legacy", "Legacy")
+
+    def _save_dynamic_ids(self, chat_id=None, first_name=None, username=None):
+        """Saves a new user to both JSON and DB (Rule #24)."""
+        if chat_id and str(chat_id) not in self.chat_ids:
+            self.chat_ids.append(str(chat_id))
+            if self.db:
+                self.db.save_user(chat_id, first_name, username)
+
         os.makedirs(os.path.dirname(self.dynamic_ids_file), exist_ok=True)
         try:
             with open(self.dynamic_ids_file, "w") as f:
-                # Save unique set of strings
                 json.dump(list(set([str(cid) for cid in self.chat_ids])), f)
         except Exception as e:
             logger.error(f"Error saving dynamic IDs: {e}")
 
+    def register_menu_commands(self):
+        """Registers the bot commands in the Telegram menu."""
+        url = f"{self.base_url}/setMyCommands"
+        commands = [
+            {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
+            {"command": "login", "description": "Admin Authentication (Password Required)"},
+            {"command": "bulk", "description": "Latest Bulk/Block Deal Intel"},
+            {"command": "upcoming", "description": "Upcoming Corporate Actions"}
+        ]
+        try:
+            requests.post(url, json={"commands": commands}, timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to register commands: {e}")
+
     def handle_updates(self):
-        """Checks for new messages and sends a welcome message for the first interaction."""
+        """Checks for new messages and handles commands."""
         if not self.token: return
         
         try:
@@ -54,154 +83,141 @@ class TelegramBot:
                 for update in data["result"]:
                     self.last_update_id = update["update_id"]
                     if "message" in update:
-                        chat_id = str(update["message"]["chat"]["id"]) # Normalize to string
+                        chat_id = str(update["message"]["chat"]["id"])
                         text = update["message"].get("text", "").strip()
                         first_name = update["message"]["from"].get("first_name", "User")
                         
-                        # Register new users dynamically
-                        is_new_user = False
+                        # 1. Registration Logic
                         if chat_id not in self.chat_ids:
-                            self.chat_ids.append(chat_id)
-                            self._save_dynamic_ids()
-                            is_new_user = True
-                            logger.info(f"Dynamically registered new user: {first_name} ({chat_id})")
-                            
-                        # Response Logic: Welcome on New User OR Explicit /start command
-                        if is_new_user or text == "/start":
-                            # Send Welcome Message
-                            welcome_text = (
-                                f" 🛰️ <b>{BOT_NAME} Activated</b>\n\n"
-                                f"Hello {first_name}! I am your high-frequency intelligence engine.\n\n"
-                                f" <b>Sources tracked:</b>\n"
-                                f"• NSE (Direct Filings)\n"
-                                f"• MoneyControl & Economic Times\n\n"
-                                f" <b>What to expect:</b>\n"
-                                f"⚡ <b>Real-time Alerts:</b> High-impact news during market hours.\n"
-                                f"🌅 <b>Morning Recap:</b> Consolidated intelligence at 08:30 IST.\n"
-                                f"🧠 <b>AI Analysis:</b> Every event is cross-verified for impact."
-                            )
-                            self._send_raw(chat_id, welcome_text)
+                            username = update["message"]["from"].get("username", "Unknown")
+                            self._save_dynamic_ids(chat_id, first_name, username)
+                            logger.info(f"New User Registered: {first_name} (@{username}) | ID: {chat_id}")
+
+                        # 2. Command Router
+                        if text == "/start":
+                            self._send_welcome(chat_id, first_name)
+                        elif text.startswith("/login"):
+                            self._handle_login(chat_id, text)
+                        elif text == "/bulk":
+                            self._handle_bulk_deals(chat_id)
+                        elif text == "/upcoming":
+                            self._handle_upcoming(chat_id)
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
 
-    def check_user_subscription(self, chat_id):
-        """
-        [PAYMENT PLACEHOLDER]
-        Checks if the user has an active subscription.
-        Currently returns True (Free Tier).
-        Integration Point: Connect this to Razorpay/Stripe database checks.
-        """
-        # TODO: Implement database lookup for user payment status
-        # return self.db.is_premium_user(chat_id)
-        return True 
+    def _send_welcome(self, chat_id, first_name):
+        welcome_text = (
+            f"🚀 <b>{BOT_NAME} v7.5 Online</b>\n\n"
+            f"Hello {first_name}! I am your high-precision NSE intelligence engine.\n\n"
+            f"<b>Core Capabilities:</b>\n"
+            f"• Direct NSE Corporate Filing Analysis\n"
+            f"• Real-time high-impact triggers (>7 Score)\n"
+            f"• Bulk/Block Deal intelligence\n\n"
+            f"⚠️ <b>LEGAL DISCLAIMER:</b>\n"
+            f"<i>This bot is for EDUCATIONAL PURPOSES only. Content does not constitute investment advice. "
+            f"We are NOT SEBI Registered advisors. Trading carries high risk.</i>"
+        )
+        self._send_raw(chat_id, welcome_text)
+
+    def _handle_login(self, chat_id, text):
+        parts = text.split()
+        if len(parts) < 2:
+            self._send_raw(chat_id, "❌ Usage: <code>/login <password></code>")
+            return
+            
+        provided_password = parts[1]
+        if provided_password == ADMIN_PASSWORD:
+            self.admin_sessions[chat_id] = time.time()
+            self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b>\nYou now have elevated privileges for this session.")
+            logger.warning(f"ADMIN LOGIN: {chat_id}")
+        else:
+            self._send_raw(chat_id, "🚫 <b>Invalid Password.</b> Access Denied.")
+            logger.error(f"FAILED LOGIN ATTEMPT: {chat_id}")
+
+    def _handle_bulk_deals(self, chat_id):
+        # Placeholder for real DB query from BulkDealSource
+        msg = "📊 <b>Latest Bulk Deal Intelligence</b>\n<i>Coming soon: Streamed from NSE x Moneycontrol</i>"
+        self._send_raw(chat_id, msg)
+
+    def _handle_upcoming(self, chat_id):
+        msg = "🗓️ <b>Upcoming High-Impact Triggers</b>\n<i>Monitoring: Mergers, Splits & Dividend Record Dates.</i>"
+        self._send_raw(chat_id, msg)
+
+    def is_admin(self, chat_id):
+        # Session valid for 4 hours
+        session_time = self.admin_sessions.get(str(chat_id), 0)
+        return (time.time() - session_time) < 14400
 
     def _send_raw(self, chat_id, text):
-        """Internal helper for sending basic text messages."""
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "HTML"
+            "parse_mode": "HTML",
+            "protect_content": True # RULE #23: Prevent forwarding
         }
         try:
-            r = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
-            if r.status_code != 200:
-                logger.error(f"Raw send failed ({r.status_code}): {r.text}")
+            requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
         except Exception as e:
             logger.error(f"Raw send failed: {e}")
 
     def send_report(self, report_text):
-        """Sends a structured pre-market report to all configured Telegram recipients."""
-        if not self.token or not self.chat_ids:
-            logger.warning("Telegram configuration missing (no token or chat_ids). Skipping report.")
-            return
+        """Sends a structured pre-market report."""
+        if not self.token or not self.chat_ids: return
 
         for chat_id in self.chat_ids:
             payload = {
                 "chat_id": chat_id,
                 "text": report_text,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": True
+                "disable_web_page_preview": True,
+                "protect_content": True
             }
-
             try:
-                logger.debug(f"Sending report to chat_id: {chat_id}")
-                r = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=20)
-                r.raise_for_status()
+                requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=20)
             except Exception as e:
                 logger.error(f"Failed to send report to {chat_id}: {e}")
-        
         logger.info(f"Broadcasted report to {len(self.chat_ids)} users.")
 
     def send_alert(self, data):
-        """Sends a premium market alert to all configured Telegram recipients."""
-        if not self.token or not self.chat_ids:
-            logger.warning("Telegram configuration missing. Skipping alert.")
-            return
+        """Sends a high-precision market alert with SEBI disclaimer."""
+        if not self.token or not self.chat_ids: return
 
         report = data.get("ai_report") or {}
         symbol = html.escape(str(data.get("symbol", "N/A")))
-        headline = html.escape(str(report.get("headline", data.get("desc", ""))))
-        # summary = html.escape(str(report.get("summary", ""))) # Can be used if long form needed
-        key_insight = html.escape(str(report.get("key_insight", "N/A")))
+        trigger = html.escape(str(data.get("trigger", "N/A")))
         
-        source = html.escape(str(data.get("source", "N/A")))
+        impact_score = data.get("impact_score", "N/A")
+        sentiment = html.escape(str(data.get("sentiment", "Neutral")))
         url = data.get("url")
-        if source == "NSE" and url and not url.startswith("http"):
+        if url and not url.startswith("http"):
             url = f"https://nsearchives.nseindia.com/corporate/{url}"
 
-        # Trade Quality & Emojis
-        probability = data.get("probability", 0)
-        quality_raw = data.get("trade_quality", "AVOID").upper()
-        impact_score = data.get("impact_score", "N/A")
-        expected_move = html.escape(str(report.get("expected_move", "N/A")))
-        sentiment = html.escape(str(data.get("sentiment", "Neutral")))
-
-        # Dynamic Header Icon & Emojis
-        if "HIGH CONFIDENCE" in quality_raw: 
-            header_icon = "🚨"
-        elif "GOOD" in quality_raw: 
-            header_icon = "✅"
-        elif "POSSIBLE" in quality_raw: 
-            header_icon = "⚠️"
-        else:
-            header_icon = "❌"
-
-        # Message Format V7.5 (Probability Engine - Summary Added)
+        # RULE #21: Precision Format
         message = (
-            f"{header_icon} <b>{symbol.upper()}</b>\n"
-            f"<b>News:</b> {headline}\n\n"
-            f"<b>Summary:</b> <i>{report.get('summary', 'N/A')}</i>\n\n"
-            f"<b>Sentiment:</b> {sentiment}\n"
-            f"<b>Impact:</b> {impact_score}/10\n"
-            f"<b>Probability:</b> {probability}% (Intraday)\n"
-            f"<b>Trade Quality:</b> {quality_raw}\n\n"
-            f"<i>Source: {source}</i> | <a href='{url or '#'}'>Read Source</a>"
+            f"🛰️ <b>{symbol.upper()}</b> | Signal Engine\n"
+            f"────────────────────────\n"
+            f"🎯 <b>TRIGGER:</b> {trigger}\n"
+            f"📊 <b>IMPACT:</b> {impact_score}/10\n"
+            f"🧠 <b>SENTIMENT:</b> {sentiment}\n"
+            f"────────────────────────\n"
+            f"👉 <a href='{url or '#'}'>Reference Filing</a>\n\n"
+            f"⚖️ <i>Non-SEBI Educational Resource</i>"
         )
 
         success = False
-        # Remove duplicates from chat_ids to prevent double sending
-        unique_chat_ids = list(set(self.chat_ids))
-
-        for chat_id in unique_chat_ids:
+        for chat_id in self.chat_ids:
             payload = {
                 "chat_id": chat_id,
                 "text": message,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": True
+                "disable_web_page_preview": True,
+                "protect_content": True
             }
-
             try:
-                # Use send_alert logging logic
-                logger.debug(f"Sending alert to chat_id: {chat_id}")
                 r = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=15)
-                if r.status_code != 200:
-                   logger.error(f"Telegram Alert Error ({r.status_code}) for {chat_id}: {r.text}")
-                r.raise_for_status()
-                success = True
+                if r.status_code == 200: success = True
             except Exception as e:
                 logger.error(f"Failed to send alert to {chat_id}: {e}")
             
-        if success:
-            logger.info(f"Broadcasted alert for {symbol} ({source}) to recipients.")
         return success

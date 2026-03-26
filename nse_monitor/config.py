@@ -16,12 +16,16 @@ BOT_NAME = "Market Pulse"
 
 # Telegram Config
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_ADMIN_BOT_TOKEN = os.getenv("TELEGRAM_ADMIN_BOT_TOKEN", "").strip()
+TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123").strip()
+
 # Support multiple chat IDs (comma-separated)
 _chat_ids = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [cid.strip() for cid in _chat_ids.split(",") if cid.strip()]
 
-# Sarvam AI Config (Primary - Indian)
-SARVAM_API_KEY = "sk_m2lt55jk_LvxJ8hWcocMtUyDkDigLCLXs"
+# AI Config
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "sk_m2lt55jk_LvxJ8hWcocMtUyDkDigLCLXs").strip()
 
 # Email Config (Notifier)
 _alert_emails = os.getenv("ALERT_EMAILS", "")

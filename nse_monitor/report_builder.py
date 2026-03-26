@@ -1,7 +1,8 @@
 import logging
 import pytz
 from datetime import datetime
-from nse_monitor.config import BOT_NAME
+from nse_monitor.sources.global_source import GlobalSource
+from nse_monitor.sources.bulk_deal_source import BulkDealSource
 
 logger = logging.getLogger(__name__)
 
@@ -10,115 +11,57 @@ class ReportBuilder:
         self.bot = bot
         self.db = db
         self.llm_processor = llm_processor
+        self.global_source = GlobalSource()
+        self.bulk_source = BulkDealSource()
 
     def generate_morning_report(self):
         """Generates and sends the morning report."""
         try:
-            # Dynamic Time Calculation:
-            # If Monday (0), look back to Friday 15:30 (approx 66 hours)
-            # Else, look back to Yesterday 15:30 (approx 18 hours)
             tz = pytz.timezone('Asia/Kolkata')
-            now_ist = datetime.now(tz)
-            is_monday = now_ist.weekday() == 0
-            lookback_hours = 66 if is_monday else 18
+            now = datetime.now(tz)
+            lookback = 66 if now.weekday() == 0 else 18
             
-            logger.info(f"Generating {BOT_NAME} Morning Report (Lookback: {lookback_hours} hours)...")
-            
-            report_text = self.build_pre_market_report(hours=lookback_hours)
-            if report_text and len(report_text) > 50:
-                 self.bot.send_report(report_text)
-            else:
-                 logger.info("Morning report empty, skipping send.")
+            report = self.build_pre_market_report(hours=lookback)
+            if len(report) > 50:
+                self.bot.send_report(report)
         except Exception as e:
-            logger.error(f"Failed to generate morning report: {e}")
+            logger.error(f"Report Generation Failed: {e}")
 
     def build_pre_market_report(self, hours=18):
-        """Builds a v7.5 execution-spec pre-market intelligence report with AI Batching."""
-        logger.info(f"Building {BOT_NAME} Pre-Market Intelligence Report (Last {hours} hours)...")
+        """Unified v7.5 Morning Intelligence Report."""
+        all_news = self.db.get_recent_news(hours=hours)
+        global_intel = self.global_source.fetch_indices()
         
-        # 1. Fetch All Analyzed News for the Recap
-        all_news_rows = self.db.get_recent_news(hours=hours)
-        all_news = []
-        if all_news_rows:
-            for row in all_news_rows:
-                if isinstance(row, dict):
-                    all_news.append(row)
-        
-        # 2. Generate Master AI Summary if news exists
-        ai_res = {}
-        if all_news:
-             ai_res = self.llm_processor.summarize_morning_batch(all_news) or {}
+        ai_res = self.llm_processor.summarize_morning_batch(all_news) if all_news else {}
 
-        # 3. Format Report (New Style)
-        report = []
+        report = [f"🌅 <b>NSE PULSE: MORNING INTEL</b>"]
+        report.append(f"────────────────────────")
         
-        # HEADER
-        date_str = datetime.now().strftime('%d %b')
-        report.append(f"🌅 <b>{BOT_NAME.upper()} MORNING INTEL</b> ({date_str})")
+        # 1. Global Setup (Rule #19)
+        report.append(f"🌎 <b>GLOBAL SETUP</b>")
+        report.append(f"• GIFT Nifty: {global_intel.get('GIFT Nifty', 'N/A')}")
+        report.append(f"• Dow Jones: {global_intel.get('Dow Jones', 'N/A')}")
         
-        # EXECUTIVE SUMMARY
-        theme = ai_res.get('theme', 'Market Update')
-        summary = ai_res.get('summary', 'No significant data available.')
-        sectors = ai_res.get('sectors_to_watch', 'All')
-        sentiment = ai_res.get('sentiment', 'Neutral')
+        # 2. Executive Summary
+        report.append(f"\n🧠 <b>STRATEGIST VIEW: {ai_res.get('theme', 'Market Update')}</b>")
+        report.append(f"<i>{ai_res.get('summary', 'No significant news detected.')}</i>")
+        report.append(f"📊 <b>Sentiment:</b> {ai_res.get('sentiment', 'Neutral')}")
         
-        sentiment_emoji = "🔴" if "Bear" in sentiment else "🟢" if "Bull" in sentiment else "🟡"
-        
-        report.append(f"\n🧠 <b>EXECUTIVE PREVIEW: {theme}</b>")
-        report.append(f"{summary}\n")
-        report.append(f"🎯 <b>Sectors to watch:</b> {sectors}")
-        report.append(f"📊 <b>Sentiment:</b> {sentiment_emoji} <b>{sentiment}</b>")
-        report.append("────────────────────────\n")
-
-        # IMPACT EVENTS (Top 5 Sorted by Impact)
-        report.append("🚨 <b>TOP IMPACT EVENTS</b>")
-        
-        # Sort by Impact Score (Descending)
-        sorted_news = sorted(all_news, key=lambda x: x.get('impact_score', 0), reverse=True)
-        top_impact = sorted_news[:5]
-        
-        if not top_impact:
-            report.append("<i>No high impact events detected.</i>")
-            
-        for idx, item in enumerate(top_impact, 1):
-            headline = item.get('headline', 'N/A')
-            impact = item.get('impact_score', 0)
+        # 3. High Impact Signals
+        report.append(f"\n🚨 <b>INSTITUTIONAL TRIGGERS</b>")
+        sorted_news = sorted(all_news, key=lambda x: x.get('impact_score', 0), reverse=True)[:5]
+        for idx, item in enumerate(sorted_news, 1):
             url = item.get('url', '#')
-            source = item.get('source', 'News')
-            summary_short = item.get('summary', '').split('.')[0] + "." # Take first sentence
-            
-            # Short Link Logic
-            link_text = "Read Source"
-            if "nse" in source.lower():
-                link_text = "PDF Filing"
-                if url and not url.startswith("http"):
-                    url = f"https://nsearchives.nseindia.com/corporate/{url}"
-            
-            report.append(f"<b>{idx}️⃣ {headline}</b> (Impact: {impact}/10)")
-            report.append(f"<i>{summary_short}</i>")
-            report.append(f"👉 <a href='{url}'>{link_text}</a>\n")
+            if not url.startswith('http'): url = f"https://nsearchives.nseindia.com/corporate/{url}"
+            report.append(f"<b>{idx}. {item['headline']}</b>")
+            report.append(f"👉 <a href='{url}'>Reference Filing</a>")
 
-        # STOCK SPECIFIC (Lower Impact but Specific)
-        report.append("📋 <b>STOCK SPECIFIC ACTION</b>")
-        stock_news = sorted_news[5:10] # Next 5
+        # 4. Bulk Deals
+        report.append(f"\n📊 <b>RECENT BULK DEALS</b>")
+        report.append("<i>Coming soon from Moneycontrol stats...</i>")
         
-        if not stock_news:
-             report.append("<i>-</i>")
-
-        for item in stock_news:
-            headline = item.get('headline', 'N/A')
-            url = item.get('url', '#')
-            source = item.get('source', 'News')
-            
-            link_text = "Source"
-            if "nse" in source.lower():
-                link_text = "PDF"
-                if url and not url.startswith("http"):
-                    url = f"https://nsearchives.nseindia.com/corporate/{url}"
-
-            report.append(f"• <b>{headline}</b> [<a href='{url}'>{link_text}</a>]")
-
-        report.append(f"\n<i>Generated by {BOT_NAME} AI</i>")
+        report.append(f"\n────────────────────────")
+        report.append(f"📍 <i>Strict NSE filings only | Non-SEBI Adv.</i>")
         
         return "\n".join(report)
 

@@ -39,106 +39,49 @@ class LLMProcessor:
         else:
             logger.error("SARVAM_API_KEY is missing in config.py")
 
-    def analyze_single_event(self, event_items, recent_news=None, market_status="CLOSED"):
+    def analyze_single_event(self, event_group, market_status="CLOSED"):
         """
-        Analyzes a single event grouping (1-3 related news items).
-        Performs merging, comparison, and intraday probability calculation.
+        Analyzes a single event group using the 22-rule High-Precision Engine.
         """
-        if not self.sarvam_client:
-            logger.error("Sarvam AI engine not initialized.")
-            return None
+        if not self.sarvam_client: return None
 
-        if not event_items:
-            return None
-
-        # Prepare context
-        current_time_str = time.strftime("%H:%M")
-        market_context_str = "MARKET IS OPEN - SPEED & ACCURACY CRITICAL" if market_status == "OPEN" else "POST-MARKET ANALYSIS"
-
-        # Prepare news content string
+        # RULE #17: Consolidate context
+        lead_news = event_group[0]
+        context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news['summary']}"
         
-        # Prepare news content string
-        news_content_str = ""
-        sources_list = []
-        for i, item in enumerate(event_items):
-            s_name = item.get("source", "Unknown")
-            sources_list.append(s_name)
-            news_content_str += f"""
---- REPORT {i+1} SOURCE: {s_name} ---
-HEADLINE: {item.get("headline")}
-SUMMARY/TEXT: {item.get("summary")}
-URL: {item.get("url")}
--------------------------------------
-"""
-        
-        sources_unique = list(set(sources_list))
-        multi_source_flag = "YES" if len(sources_unique) > 1 else "NO"
-
-        # --- PROMPT ENGINEERING ---
+        # RULE #2: Persona | RULES #5-13, #16: Institutional logic
         prompt = f"""
-You are a Lead Quantitative & Macro Strategist specialized in the Indian Equity Markets.
-Task: Analyze this group of news reports representing a SINGLE EVENT.
+ROLE: Lead Quantitative Strategist (NSE Institutional Desk)
+TASK: Analyze this NSE Corporate Filing for IMMEDIATE market impact.
 
-CONTEXT:
-Mode: {market_context_str}
-Time: {current_time_str}
-Sources Available: {", ".join(sources_unique)}
-Multi-Source Cross-Check: {multi_source_flag}
+22-RULE INSTITUTIONAL LOGIC:
+1. NO-FOMO POLICY: If the news describes an event that has ALREADY occurred or concluded, reject it (impact_score: 0).
+2. FORWARD-LOOKING ONLY: Focus on future triggers (Orders, Deals, Mergers, FDA, Earnings surprises).
+3. CRORE-VALUE THRESHOLD: Orders must be >50Cr (Smallcap) or >500Cr (Largecap).
+4. IMPACT SCORING (1-10):
+   - 9-10: Game Changer (Merger, Massive Order).
+   - 7-8: High Impact (Strong Earnings, FDA).
+   - <7: Routine/Compliance (REJECT).
 
-NEWS REPORTS:
-{news_content_str}
+EXCLUSIONS (Score 0): Board meets (general), Shareholding updates, Trading window, Resignations (except CEO/CFO).
 
-==================================================
-STEP 1: MERGE & EXCLUDE
-1. Fuse insights into one "Master Narrative".
-2. EXCLUSIONS (CRITICAL):
-   - REJECT if "Opinion" / "Market Commentary".
-   - REJECT if older than 24h.
+MARKET STATUS: {market_status}
 
-==================================================
-STEP 2: PROBABILITY CALCULATION LOGIC
-Objective: Estimate probability of significant intraday move (1-3%).
+FILING DATA:
+{context_text}
 
-A. BASE PROBABILITY (From Impact Score 1-10):
-   - Impact 9-10 -> 75%  (High Confidence)
-   - Impact 7-8  -> 65%  (Good Setup)
-   - Impact 5-6  -> 50%  (Possible Move)
-   - Impact < 5  -> 10%  (Avoid)
-
-B. ADJUSTMENTS (Add/Subtract):
-   +10% -> If Global Sentiment supports direction
-   +10% -> If Sector is Strong
-   +5%  -> If multiple sources confirm same news
-   +5%  -> If news released before market open (Pre-market)
-   
-   -10% -> If Market Sentiment is opposite
-   -10% -> If Sector is Weak
-   -5%  -> If news is already old (>12 hours)
-
-==================================================
-STEP 3: CLASSIFICATION (TRADE QUALITY)
-   - 80%+   -> HIGH CONFIDENCE TRADE (Significant Move Likely)
-   - 65-79% -> GOOD TRADE SETUP (Moderate Move)
-   - 50-64% -> POSSIBLE MOVE (Risky but Actionable)
-   - < 50%  -> AVOID
-
-==================================================
-OUTPUT FORMAT (JSON):
+OUTPUT FORMAT (STRICT JSON ONLY):
 {{
-  "symbol": "RELIANCE | TATAMOTORS | NIFTY | MARKET",
-  "headline": "Strategic Headline",
-  "summary": "1-2 sentence summary.",
-  "sentiment": "Bullish | Bearish | Neutral",
-  "impact_score": <int 1-10>,
-  "probability": <int 0-100>,
-  "trade_quality": "HIGH CONFIDENCE | GOOD SETUP | POSSIBLE MOVE | AVOID",
-  "expected_move": "Sharp Move | Gradual Move | Low Movement",
-  "key_insight": "Reasoning for probability score.",
-  "valid_event": true
+  "valid_event": boolean,
+  "symbol": "STOCK_SYMBOL",
+  "trigger": "Short 1-line trigger",
+  "impact_score": integer (1-10),
+  "sentiment": "Bullish/Bearish/Neutral",
+  "sector": "SECTOR_NAME",
+  "expected_move": "Intraday/Positional",
+  "key_insight": "Professional insight",
+  "summary": "2-sentence executive summary"
 }}
-
-If Invalid/Junk: "valid_event": false.
-(Note: Market News, Expert Analysis, sector updates, and macro news remain VALID events even if not specific stock filings)
 """
         return self._run_prompt(prompt)
 

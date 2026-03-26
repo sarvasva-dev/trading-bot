@@ -68,6 +68,26 @@ class Database:
                     FOREIGN KEY (news_id) REFERENCES news_items (id)
                 )
             """)
+
+            # User Tracking table (Rule #24)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    first_name TEXT,
+                    username TEXT,
+                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Scheduled Events table (Upgraded Version)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_time TEXT,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
             # v7.0 Performance Indexes
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news_items(timestamp)")
@@ -245,11 +265,25 @@ class Database:
                 (news_id,)
             )
 
+    def save_user(self, chat_id, first_name=None, username=None):
+        """Saves or updates a user in the permanent database."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO users (id, first_name, username) VALUES (?, ?, ?)",
+                (str(chat_id), first_name, username)
+            )
+
+    def get_user_count(self):
+        """Returns the total number of unique users."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        return cursor.fetchone()[0]
+
     def get_recent_news(self, hours=24):
         """Fetches recent news items for AI deduplication."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT id, headline, summary FROM news_items WHERE created_at > datetime('now', ?)",
+            "SELECT id, headline, summary, impact_score, url, source, symbol FROM news_items WHERE created_at > datetime('now', ?)",
             (f"-{hours} hours",)
         )
-        return [{"id": row[0], "headline": row[1], "summary": row[2]} for row in cursor.fetchall()]
+        return [{"id": row[0], "headline": row[1], "summary": row[2], "impact_score": row[3], "url": row[4], "source": row[5], "symbol": row[6]} for row in cursor.fetchall()]
