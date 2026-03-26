@@ -15,9 +15,10 @@ class TelegramBot:
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.db = db
         self.payment_processor = RazorpayProcessor()
-        self.chat_ids = set()
+        self.chat_ids = [] # Use list for append/ordering
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
         self.admin_sessions = {} # chat_id: timestamp
+        self.last_update_id = 0 # Track Telegram offsets
         self._load_dynamic_ids()
         self._sync_with_db()
 
