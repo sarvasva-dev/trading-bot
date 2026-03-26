@@ -189,7 +189,8 @@ class AdminPanel:
         
         for u in users:
             uid, name, uname, active, days = u
-            username_safe = f"(@{uname})" if uname and uname != "manual_entry" else ""
+            uname_label = f"@{uname}" if uname and uname not in ("manual_entry", "Unknown", "Legacy") else f"...{str(uid)[-6:]}"
+            display_name = name if name and name != "Sync_Legacy" else "User"
             icon = "💎" if active else "🆓"
             
             plan_name = "Trial"
@@ -198,8 +199,8 @@ class AdminPanel:
             elif days >= 7: plan_name = "Grth"
             elif days >= 2: plan_name = "Star"
             
-            text += f"{icon} {name} [<code>{uid}</code>] | <b>{days}d</b>\n"
-            keyboard["inline_keyboard"].append([{"text": f"⚙️ Manage {name}", "callback_data": f"manage_{uid}"}])
+            text += f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>\n"
+            keyboard["inline_keyboard"].append([{"text": f"⚙️ {uname_label} | {str(uid)[-6:]}", "callback_data": f"manage_{uid}"}])
         
         if not users:
             text += "<i>No users found in database.</i>"
