@@ -10,11 +10,15 @@ logger = logging.getLogger(__name__)
 
 class RazorpayProcessor:
     def __init__(self):
-        try:
-            self.client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        except Exception as e:
-            logger.error(f"Failed to initialize Razorpay Client: {e}")
-            self.client = None
+        self.client = None
+        if razorpay:
+            try:
+                self.client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+                logger.info("Razorpay Client Initialized.")
+            except Exception as e:
+                logger.error(f"Failed to initialize Razorpay Client: {e}")
+        else:
+            logger.warning("Razorpay library not found. Payment features will be disabled (Rule #24).")
 
     def create_payment_link(self, chat_id, plan_type, first_name="User"):
         """Generates a Razorpay Payment Link for a specific plan."""
