@@ -61,7 +61,7 @@ logger = logging.getLogger("NSEPulse")
 
 class MarketIntelligenceSystem:
     def __init__(self):
-        logger.info("Initializing Signal Engine v9.3 (Institutional Prime)...")
+        logger.info("Initializing Signal Engine v10.0 (Institutional Prime)...")
         self.db = Database()
         self.bot = TelegramBot(db=self.db)
         self.pdf_processor = PDFProcessor()

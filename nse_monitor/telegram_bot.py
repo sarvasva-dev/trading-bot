@@ -23,6 +23,24 @@ class TelegramBot:
         self.last_update_id = 0 # Track Telegram offsets
         self._load_dynamic_ids()
         self._sync_with_db()
+        self.set_my_commands()
+
+    def set_my_commands(self):
+        """Sets the blue menu buttons in the Telegram UI (Rule #24)."""
+        if not self.token: return
+        commands = [
+            {"command": "plan", "description": "💎 My Subscription & Expiry"},
+            {"command": "subscribe", "description": "🛒 Recharge / Upgrade"},
+            {"command": "bulk", "description": "📈 Today's Big Deals"},
+            {"command": "upcoming", "description": "🗓️ Corporate Calendar"},
+            {"command": "support", "description": "🛠️ Contact Admin (WhatsApp)"}
+        ]
+        url = f"{self.base_url}/setMyCommands"
+        try:
+            requests.post(url, json={"commands": commands}, timeout=5)
+            logger.info("Telegram Command Menu (Blue Button) updated.")
+        except Exception as e:
+            logger.error(f"Failed to set commands: {e}")
 
     def _load_dynamic_ids(self):
         """Loads IDs from JSON storage."""
@@ -113,8 +131,16 @@ class TelegramBot:
                             self._handle_subscribe_menu(chat_id)
                         elif text.startswith("/sub_"):
                             self._handle_plan_selection(chat_id, text, first_name)
-                        elif text.startswith("/check_payment"):
-                            self._handle_check_payment(chat_id, text)
+                        elif text == "/support":
+                            self._send_raw(chat_id, "🛠️ <b>Contact Support</b>\nClick the button below to message the owner on WhatsApp.", 
+                                          {"inline_keyboard": [[{"text": "📲 Message on WhatsApp", "url": "https://wa.me/917985040858"}]]})
+                        elif text == "/verify":
+                            self._handle_manual_verify(chat_id)
+                        elif text.startswith("/check_payment") or text.startswith("/verify_"):
+                            # Handle both auto-links and manual verify
+                            parts = text.split("_")
+                            link_id = parts[1] if len(parts) > 1 else None
+                            self._handle_check_payment(chat_id, link_id)
                         elif text == "/bulk":
                             self._handle_bulk_deals(chat_id)
                         elif text == "/upcoming":
@@ -175,7 +201,7 @@ class TelegramBot:
         keyboard = {
             "inline_keyboard": [
                 [{"text": "💎 Renew / Upgrade Plan", "callback_data": "sub_menu"}],
-                [{"text": "🛠️ Contact Admin", "url": "https://t.me/marketnewsv1bot"}]
+                [{"text": "🛠️ Contact Admin (WhatsApp)", "url": "https://wa.me/917985040858"}]
             ]
         }
         self._send_raw(chat_id, msg, keyboard)
@@ -402,7 +428,6 @@ class TelegramBot:
         """Generates link for selected plan and saves for auto-verification."""
         plan_type = text.replace("/sub_", "")
         self._send_raw(chat_id, f"⌛ <b>Generating link for ₹{plan_type} plan...</b>")
-        
         link_data = self.payment_processor.create_payment_link(chat_id, plan_type, first_name)
         if link_data:
             # RULE #24: Save for background poller
@@ -418,24 +443,42 @@ class TelegramBot:
         else:
             self._send_raw(chat_id, "❌ Error generating link. Please try later.")
 
-    def _handle_check_payment(self, chat_id, text):
-        """Verifies and credits working days."""
-        parts = text.split()
-        if len(parts) < 2:
-            self._send_raw(chat_id, "⚠️ Usage: <code>/check_payment <link_id></code>")
+    def _handle_manual_verify(self, chat_id):
+        """Triggered by the /verify command (Rule #24)."""
+        pending = self.db.get_pending_payment_links()
+        user_pending = [p for p in pending if str(p[1]) == str(chat_id)]
+        
+        if not user_pending:
+            self._send_raw(chat_id, "❓ <b>No Pending Payments Found.</b>\nIf you just paid, please wait 2-3 minutes or contact support.")
             return
             
-        pl_id = parts[1]
-        self._send_raw(chat_id, "🔍 <b>Verifying transaction...</b>")
-        
-        days_to_add = self.payment_processor.verify_payment_status(pl_id)
+        # Check the latest one
+        link_id = user_pending[-1][0]
+        self._send_raw(chat_id, f"🔍 <b>Verifying Ref: <code>{link_id}</code>...</b>")
+        self._handle_check_payment(chat_id, link_id)
+
+    def _handle_check_payment(self, chat_id, link_id):
+        """Internal helper to verify Razorpay status (Fraud-Proof)."""
+        if not link_id:
+            self._send_raw(chat_id, "❌ Invalid transaction reference.")
+            return
+            
+        days_to_add = self.payment_processor.verify_payment_status(link_id)
         if days_to_add:
             # RULE #24: Credit Working Days
             self.db.add_working_days(chat_id, days_to_add)
-            self._send_raw(chat_id, f"🎉 <b>Success! {days_to_add} Market Days credited.</b>\nYour premium access is now live.")
-            logger.info(f"USER PAID: {chat_id} | {days_to_add} days added via {pl_id}")
+            self.db.update_payment_link_status(link_id, 'processed') # Clean up
+            
+            msg = (
+                f"🎉 <b>Success! {days_to_add} Market Days credited.</b>\n"
+                f"────────────────────────\n"
+                f"Your premium access is now <b>LIVE</b>. 🚀\n"
+                f"Use /plan to see your new expiry date."
+            )
+            self._send_raw(chat_id, msg)
+            logger.info(f"USER PAID (MANUAL VERIFY): {chat_id} | {days_to_add} days via {link_id}")
         else:
-            self._send_raw(chat_id, "❌ Payment not found or pending.")
+            self._send_raw(chat_id, "⏳ <b>Transaction Pending.</b>\nRazorpay hasn't confirmed this payment yet. Please try again in 5 minutes.")
 
     def is_admin(self, chat_id):
         # Session valid for 5 minutes (300 seconds)
