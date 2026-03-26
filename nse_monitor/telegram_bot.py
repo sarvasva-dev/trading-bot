@@ -117,7 +117,6 @@ class TelegramBot:
                             self._handle_upcoming(chat_id)
                         elif text == "/admin":
                             self._send_raw(chat_id, "🔐 <b>Admin Panel has moved!</b>\nPlease use the dedicated Admin Bot for administrative actions.")
-                            self._handle_upcoming(chat_id)
 
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
