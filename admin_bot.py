@@ -104,6 +104,8 @@ class AdminPanel:
             self._handle_status(chat_id)
         elif text == "/users":
             self._handle_users(chat_id)
+        elif text.startswith("/find"):
+            self._handle_find(chat_id, text)
         elif text.startswith("/grant"):
             self._handle_grant(chat_id, text)
         elif text.startswith("/broadcast"):
@@ -130,6 +132,9 @@ class AdminPanel:
         elif data.startswith("reset_"):
             uid = data.split("_")[1]
             self._execute_reset(chat_id, uid)
+        elif data.startswith("deactivate_"):
+            uid = data.split("_")[1]
+            self._execute_deactivate(chat_id, uid)
         elif data.startswith("plans_"):
             uid = data.split("_")[1]
             self._show_plan_options(chat_id, uid)
@@ -141,7 +146,7 @@ class AdminPanel:
 
     def _send_main_menu(self, chat_id):
         text = (
-            f"🛠️ <b>{BOT_NAME} ADMIN GUIDE (v8.7)</b>\n"
+            f"🛠️ <b>{BOT_NAME} ADMIN GUIDE (v11.0)</b>\n"
             f"────────────────────────\n"
             f"<b>Commands:</b>\n"
             f"• <code>/list</code> — Full User Audit Log\n"
@@ -218,6 +223,7 @@ class AdminPanel:
         keyboard = {
             "inline_keyboard": [
                 [{"text": "🔄 Reset to 0 Days", "callback_data": f"reset_{uid}"}],
+                [{"text": "🚫 Deactivate Account", "callback_data": f"deactivate_{uid}"}],
                 [{"text": "➕ Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
                 [{"text": "🔙 Back to List", "callback_data": "menu_list"}]
             ]
@@ -236,6 +242,11 @@ class AdminPanel:
             ]
         }
         self._send(chat_id, text, keyboard)
+
+    def _execute_deactivate(self, chat_id, uid):
+        self.db.toggle_user_status(uid, 0)
+        self._send(chat_id, f"🚫 <b>Action Complete:</b> User <code>{uid}</code> has been deactivated. Signals paused.")
+        self._show_manage_menu(chat_id, uid)
 
     def _execute_reset(self, chat_id, uid):
         self.db.reset_user_days(uid)
@@ -257,6 +268,29 @@ class AdminPanel:
         )
         self._notify_user_via_signal_bot(uid, msg)
         self._show_manage_menu(chat_id, uid)
+
+    def _handle_find(self, chat_id, text):
+        """Search users by ID or name (v12.0)."""
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            self._send(chat_id, "🔍 Usage: <code>/find &lt;name or id&gt;</code>")
+            return
+        
+        query = parts[1].strip()
+        results = self.db.search_users(query)
+        
+        if not results:
+            self._send(chat_id, f"❌ No users found matching: <code>{query}</code>")
+            return
+        
+        text_out = f"🔍 <b>Search Results for:</b> <code>{query}</code>\n────────────────────────\n"
+        keyboard = {"inline_keyboard": []}
+        for uid, name, uname, active, days in results:
+            icon = "💎" if active else "🆓"
+            text_out += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
+            keyboard["inline_keyboard"].append([{"text": f"⚙️ Manage {name}", "callback_data": f"manage_{uid}"}])
+        
+        self._send(chat_id, text_out, keyboard)
 
     def _handle_users(self, chat_id):
         users = self.db.get_all_users(limit=15)

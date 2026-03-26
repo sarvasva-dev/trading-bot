@@ -100,7 +100,7 @@ class MarketIntelligenceSystem:
         else:
             logger.info("Weekend Detected. Skipping subscription decrement.")
 
-        # 2. Send Expiry Reminders (Every day)
+        # 2. Send Expiry Reminders to EXPIRED users (Every day)
         expired_users = self.db.get_expired_users()
         if expired_users:
             logger.info(f"Sending expiry reminders to {len(expired_users)} users...")
@@ -108,6 +108,28 @@ class MarketIntelligenceSystem:
                 try:
                     self.bot._send_expiry_reminder(chat_id)
                 except: continue
+
+    def send_preexpiry_reminders(self):
+        """Runs at 6 PM IST — warns users with exactly 1 day left to renew."""
+        users = self.db.get_expiring_soon_users()
+        if not users:
+            return
+        logger.info(f"Sending 24h pre-expiry reminders to {len(users)} users...")
+        for chat_id, first_name in users:
+            try:
+                msg = (
+                    f"⚠️ <b>Heads up, {first_name}!</b>\n"
+                    f"────────────────────────\n"
+                    f"Your Market Pulse subscription expires <b>tomorrow</b>.\n\n"
+                    f"Renew now to keep receiving institutional NSE signals without any interruption. 📈\n"
+                )
+                self.bot._send_raw(chat_id, msg, {
+                    "inline_keyboard": [
+                        [{"text": "🔄 Renew Now", "callback_data": "sub_menu"}],
+                        [{"text": "🛠️ Contact Admin", "url": "https://wa.me/917985040858"}]
+                    ]
+                })
+            except: continue
 
     def check_pending_payments(self):
         """Polls Razorpay for the status of pending links (Rule #24)."""
@@ -141,7 +163,7 @@ class MarketIntelligenceSystem:
 
     def start(self):
         """Initializes all polling and reporting jobs."""
-        logger.info(f"Initializing {BOT_NAME} Schedule (v1.0)...")
+        logger.info(f"Initializing {BOT_NAME} Schedule (v12.0)...")
         
         # 1. Market Intel Polling (Every 3 Minutes)
         self.scheduler.add_job(self.safe_run_cycle, 'interval', minutes=3, id='market_cycle')
@@ -159,7 +181,11 @@ class MarketIntelligenceSystem:
         # 5. Auto-Payment Verification (Every 1 Minute) - Rule #24
         self.scheduler.add_job(self.check_pending_payments, 'interval', minutes=1, id='payment_poller')
 
-        logger.info("Scheduler started (08:30 IST Reports | 1-Min Auto-Pay | 3-Min Polling).")
+        # 6. 24h Pre-Expiry Reminder (6:00 PM IST) - v12.0
+        self.scheduler.add_job(self.send_preexpiry_reminders, 'cron',
+                               hour=18, minute=0, id='preexpiry_reminder', timezone=self.ist)
+
+        logger.info("Scheduler started (08:30 IST Reports | 18:00 Pre-Expiry | 1-Min Auto-Pay | 3-Min Polling).")
         self.scheduler.start()
 
     def safe_run_cycle(self):

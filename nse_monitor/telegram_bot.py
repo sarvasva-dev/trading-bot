@@ -112,7 +112,7 @@ class TelegramBot:
                         if chat_id not in self.chat_ids:
                             username = update["message"]["from"].get("username", "Unknown")
                             is_new = self.db.save_user(chat_id, first_name, username) if self.db else False
-                            self.chat_ids.add(chat_id)
+                            self.chat_ids.append(chat_id)
                             
                             if is_new:
                                 self._send_raw(chat_id, "🎁 <b>Welcome Offer Activated!</b>\nYou've been credited with <b>2 Free Market Days</b> as a first-time user. Signals start now!")
@@ -455,32 +455,92 @@ class TelegramBot:
         self._send_raw(chat_id, f"✅ <b>Broadcast Sent!</b>\nDelivered to {sent} active subscribers.")
 
     def _handle_bulk_deals(self, chat_id):
-        # Placeholder for real DB query from BulkDealSource
-        msg = "📊 <b>Latest Bulk Deal Intelligence</b>\n<i>Coming soon: Streamed from NSE x Moneycontrol</i>"
-        self._send_raw(chat_id, msg)
+        """Fetches real-time NSE Bulk & Block Deal data (v12.0)."""
+        self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals from NSE...</b>")
+        try:
+            import requests as req
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.nseindia.com/market-data/bulk-deals"
+            }
+            # Get NSE cookies first
+            s = req.Session()
+            s.get("https://www.nseindia.com", headers=headers, timeout=8)
+            r = s.get("https://www.nseindia.com/api/bulk-deal-live", headers=headers, timeout=8)
+            data = r.json()
+            deals = data.get("data", [])
+            
+            if not deals:
+                self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>No bulk deals reported yet today. Check after market opens (9:15 AM).</i>")
+                return
+            
+            msg = "📊 <b>TODAY'S BULK DEALS</b>\n────────────────────────\n"
+            for d in deals[:8]:  # Max 8 deals
+                symbol = d.get("symbol", "N/A")
+                client = d.get("clientName", "N/A")
+                qty = d.get("quantityTraded", 0)
+                price = d.get("tradePrice", 0)
+                bos = d.get("buySellFlag", "")
+                icon = "🟢" if bos == "BUY" else "🔴"
+                msg += f"{icon} <b>{symbol}</b> | {bos}\n"
+                msg += f"   Client: {client}\n"
+                msg += f"   Qty: {qty:,} @ ₹{price}\n\n"
+            
+            msg += "⚖️ <i>Non-SEBI Educational Resource</i>"
+            self._send_raw(chat_id, msg)
+        except Exception as e:
+            logger.error(f"Bulk deals fetch error: {e}")
+            self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>\nTry again during market hours (9:15 AM - 3:30 PM).")
 
     def _handle_upcoming(self, chat_id):
-        msg = "🗓️ <b>Upcoming High-Impact Triggers</b>\n<i>Monitoring: Mergers, Splits & Dividend Record Dates.</i>"
-        self._send_raw(chat_id, msg)
+        """Fetches NSE Corporate Action Calendar (v12.0)."""
+        self._send_raw(chat_id, "⏳ <b>Fetching NSE Corporate Calendar...</b>")
+        try:
+            import requests as req
+            from datetime import datetime, timedelta
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-actions"
+            }
+            s = req.Session()
+            s.get("https://www.nseindia.com", headers=headers, timeout=8)
+            
+            today = datetime.now().strftime("%d-%m-%Y")
+            end = (datetime.now() + timedelta(days=14)).strftime("%d-%m-%Y")
+            url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={today}&to_date={end}&csv=false"
+            r = s.get(url, headers=headers, timeout=8)
+            data = r.json()
+            actions = data if isinstance(data, list) else data.get("data", [])
+            
+            if not actions:
+                self._send_raw(chat_id, "🗓️ <b>Corporate Calendar</b>\n<i>No major events in the next 14 days. Check back tomorrow.</i>")
+                return
+            
+            msg = "🗓️ <b>NSE CORPORATE CALENDAR (Next 14 Days)</b>\n────────────────────────\n"
+            shown = 0
+            for a in actions:
+                if shown >= 10: break
+                symbol = a.get("symbol", "N/A")
+                purpose = a.get("purpose", a.get("subject", "N/A"))
+                ex_date = a.get("exDate", a.get("recDate", "N/A"))
+                
+                # Highlight key events
+                if any(k in purpose.lower() for k in ["dividend", "split", "bonus", "merger", "buyback"]):
+                    icon = "🔥"
+                else:
+                    icon = "🟡"
+                
+                msg += f"{icon} <b>{symbol}</b>\n"
+                msg += f"   📅 {ex_date} | {purpose[:50]}\n\n"
+                shown += 1
+            
+            msg += "⚖️ <i>Non-SEBI Educational Resource</i>"
+            self._send_raw(chat_id, msg)
+        except Exception as e:
+            logger.error(f"Upcoming events fetch error: {e}")
+            self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>\nTry again later.")
 
-    def _handle_subscribe_menu(self, chat_id):
-        """Displays available plans to the user."""
-        msg = (
-            "💎 <b>PREMIUM PLANS (MARKET DAYS)</b>\n"
-            "<i>(Subscription only debits on trading days)</i>\n"
-            "────────────────────────\n"
-            "🔸 <b>Starter:</b> ₹99 (2 Market Days)\n"
-            "👉 /sub_99\n\n"
-            "🔹 <b>Growth:</b> ₹499 (7 Working Days)\n"
-            "👉 /sub_499\n\n"
-            "🚀 <b>Pro:</b> ₹999 (28 Working Days)\n"
-            "👉 /sub_999\n\n"
-            "🏆 <b>Institutional:</b> ₹5999 (336 Days)\n"
-            "👉 /sub_5999\n"
-            "────────────────────────\n"
-            "💡 Select a plan above to generate a secure link."
-        )
-        self._send_raw(chat_id, msg)
+    # NOTE: _handle_subscribe_menu is defined at line ~310 (dynamic version). Duplicate removed.
 
     def _handle_plan_selection(self, chat_id, text, first_name):
         """Generates link for selected plan and saves for auto-verification."""

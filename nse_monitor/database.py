@@ -364,6 +364,21 @@ class Database:
         cursor.execute("SELECT id FROM users WHERE working_days_left <= 0")
         return [row[0] for row in cursor.fetchall()]
 
+    def get_expiring_soon_users(self):
+        """Fetches users with exactly 1 day left — for 24h pre-expiry reminders."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, first_name FROM users WHERE working_days_left = 1 AND is_active = 1")
+        return cursor.fetchall()
+
+    def search_users(self, query):
+        """Search users by name or ID for admin /find command."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, first_name, username, is_active, working_days_left FROM users WHERE id LIKE ? OR first_name LIKE ? OR username LIKE ? LIMIT 5",
+            (f"%{query}%", f"%{query}%", f"%{query}%")
+        )
+        return cursor.fetchall()
+
     def get_user_stats(self):
         """Returns total and active user counts."""
         cursor = self.conn.cursor()
