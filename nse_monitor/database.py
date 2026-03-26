@@ -385,10 +385,22 @@ class Database:
         cursor.execute("SELECT COUNT(*), SUM(is_active) FROM users")
         return cursor.fetchone()
 
-    def get_all_users(self, limit=20):
-        """Fetches latest registered users with status."""
+    def get_all_users(self, limit=20, offset=0):
+        """Fetches registered users with status and pagination (v12.0)."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, first_name, username, is_active, working_days_left FROM users ORDER BY registered_at DESC LIMIT ?", (limit,))
+        cursor.execute(
+            "SELECT id, first_name, username, is_active, working_days_left FROM users ORDER BY registered_at DESC LIMIT ? OFFSET ?", 
+            (limit, offset)
+        )
+        return cursor.fetchall()
+
+    def get_user_payment_history(self, chat_id):
+        """Fetches successful payments for a specific user (v12.0)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT link_id, days, created_at FROM payment_links WHERE chat_id = ? AND status = 'processed' ORDER BY created_at DESC", 
+            (str(chat_id),)
+        )
         return cursor.fetchall()
 
     def get_user(self, chat_id):

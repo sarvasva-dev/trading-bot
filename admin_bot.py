@@ -123,9 +123,13 @@ class AdminPanel:
         if data == "menu_status":
             self._handle_status(chat_id)
         elif data == "menu_list" or data == "menu_users":
-            self._handle_list(chat_id)
+            self._handle_list(chat_id, 0)
         elif data == "menu_broadcast":
             self._send(chat_id, "📢 Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+        elif data.startswith("list_page_"):
+            page = int(data.split("_")[2])
+            offset = page * 10
+            self._handle_list(chat_id, offset)
         elif data.startswith("manage_"):
             uid = data.split("_")[1]
             self._show_manage_menu(chat_id, uid)
@@ -180,33 +184,39 @@ class AdminPanel:
         )
         self._send(chat_id, text)
 
-    def _handle_list(self, chat_id):
-        """Highly detailed user audit list with action buttons (v11.0)."""
-        users = self.db.get_all_users(limit=10) # Reduced limit for button safety
-        text = "📋 <b>INSTITUTIONAL USER AUDIT</b>\n────────────────────────\n"
+    def _handle_list(self, chat_id, offset=0):
+        """Highly detailed user audit list with pagination (v12.0)."""
+        limit = 10
+        users = self.db.get_all_users(limit=limit, offset=offset)
+        page = offset // limit
         
+        text = f"📋 <b>USER AUDIT (Page {page + 1})</b>\n────────────────────────\n"
         keyboard = {"inline_keyboard": []}
         
         for u in users:
             uid, name, uname, active, days = u
-            uname_label = f"@{uname}" if uname and uname not in ("manual_entry", "Unknown", "Legacy") else f"...{str(uid)[-6:]}"
+            has_username = uname and uname not in ("manual_entry", "Unknown", "Legacy", "Sync_Legacy", "None")
+            uname_label = f"@{uname}" if has_username else f"...{str(uid)[-6:]}"
             display_name = name if name and name != "Sync_Legacy" else "User"
             icon = "💎" if active else "🆓"
-            
-            plan_name = "Trial"
-            if days >= 336: plan_name = "Insti"
-            elif days >= 28: plan_name = "Pro"
-            elif days >= 7: plan_name = "Grth"
-            elif days >= 2: plan_name = "Star"
-            
             text += f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>\n"
-            keyboard["inline_keyboard"].append([{"text": f"⚙️ {uname_label} | {str(uid)[-6:]}", "callback_data": f"manage_{uid}"}])
+            keyboard["inline_keyboard"].append([{"text": f"⚙️ {uname_label}", "callback_data": f"manage_{uid}"}])
         
+        # Pagination Buttons
+        nav_buttons = []
+        if offset > 0:
+            nav_buttons.append({"text": "⬅️ Prev", "callback_data": f"list_page_{page - 1}"})
+        if len(users) == limit:
+            nav_buttons.append({"text": "Next ➡️", "callback_data": f"list_page_{page + 1}"})
+        
+        if nav_buttons:
+            keyboard["inline_keyboard"].append(nav_buttons)
+            
         if not users:
-            text += "<i>No users found in database.</i>"
+            text += "<i>No more users found.</i>"
             
         text += "────────────────────────\n"
-        text += "💡 <i>Click 'Manage' to Reset or Grant Plans.</i>"
+        text += "💡 <i>Click user for Manage Menu.</i>"
         self._send(chat_id, text, keyboard)
 
     def _show_manage_menu(self, chat_id, uid):

@@ -75,20 +75,20 @@ RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_placeholder")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "secret_placeholder")
 
 # Dynamic Subscription Plans
-def _get_plan(key, default):
+def _get_plan(key, default, label):
     val = os.getenv(key, default)
     try:
         p, d = val.split(":")
-        return {"amount": int(p), "days": int(d)}
+        return {"amount": int(p), "days": int(d), "label": label}
     except:
         p, d = default.split(":")
-        return {"amount": int(p), "days": int(d)}
+        return {"amount": int(p), "days": int(d), "label": label}
 
 SUBSCRIPTION_PLANS = {
-    "99": _get_plan("PLAN_99", "99:2"),
-    "499": _get_plan("PLAN_499", "499:7"),
-    "999": _get_plan("PLAN_999", "999:28"),
-    "7999": _get_plan("PLAN_7999", "7999:336")
+    "99": _get_plan("PLAN_99", "99:2", "Starter"),
+    "499": _get_plan("PLAN_499", "499:7", "Growth"),
+    "999": _get_plan("PLAN_999", "999:28", "Pro"),
+    "7999": _get_plan("PLAN_7999", "7999:336", "Institutional")
 }
 
 # --- SCHEDULER CONTROLS ---

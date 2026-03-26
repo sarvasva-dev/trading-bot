@@ -83,7 +83,9 @@ class TelegramBot:
         commands = [
             {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
             {"command": "subscribe", "description": "Get Premium Access (Razorpay Link)"},
-            {"command": "me", "description": "Show My ID & Subscription Balance"}
+            {"command": "me", "description": "My ID & Credits Balance"},
+            {"command": "history", "description": "View My Payment History"},
+            {"command": "support", "description": "Contact Human Support"}
         ]
         try:
             requests.post(url, json={"commands": commands}, timeout=10)
@@ -129,6 +131,8 @@ class TelegramBot:
                             self._handle_plan(chat_id, first_name)
                         elif text == "/subscribe":
                             self._handle_subscribe_menu(chat_id)
+                        elif text == "/history":
+                            self._handle_history(chat_id)
                         elif text.startswith("/sub_"):
                             self._handle_plan_selection(chat_id, text, first_name)
                         elif text == "/support":
@@ -298,7 +302,7 @@ class TelegramBot:
             price = plan["amount"]
             days = plan["days"]
             label = "Working Days" if days > 2 else "Market Days"
-            if days >= 336: label = "Year"
+            if days >= 336: label = "Days"
             
             msg += f"🔸 <b>Plan:</b> ₹{price} ({days} {label})\n"
             msg += f"👉 /sub_{price}\n\n"
@@ -681,3 +685,30 @@ class TelegramBot:
                 logger.error(f"Failed to send alert to {chat_id}: {e}")
             
         return success
+    def _handle_history(self, chat_id):
+        """Displays user's successful payment history (v12.0)."""
+        history = self.db.get_user_payment_history(chat_id)
+        if not history:
+            msg = (
+                "📜 <b>TRANSCRIPT HISTORY</b>\n"
+                "────────────────────────\n"
+                "<i>No successful transactions found for your ID.</i>\n\n"
+                "💡 If you recently paid, use /verify to sync."
+            )
+            self._send_raw(chat_id, msg)
+            return
+
+        msg = "📜 <b>YOUR PAYMENT HISTORY</b>\n────────────────────────\n"
+        for link_id, days, date_str in history[:10]: # Last 10
+            # Simplify date
+            try:
+                date_ts = datetime.fromisoformat(date_str).strftime("%d %b, %H:%M")
+            except:
+                date_ts = date_str
+            
+            msg += f"✅ <b>+{days} Days</b> | <code>{link_id[-8:]}</code>\n"
+            msg += f"   📅 {date_ts}\n\n"
+        
+        msg += "────────────────────────\n"
+        msg += "📈 <i>Thank you for supporting Market Pulse.</i>"
+        self._send_raw(chat_id, msg)
