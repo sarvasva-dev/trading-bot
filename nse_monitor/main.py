@@ -155,8 +155,9 @@ class MarketIntelligenceSystem:
             
             if not analysis or not analysis.get("valid_event"): continue
             
+            import nse_monitor.config as config
             impact = analysis.get("impact_score", 0)
-            if impact < 7: continue # RULE #12
+            if impact < config.ALERT_THRESHOLD: continue # RULE #12
             
             sector = analysis.get("sector", "Unknown")
             if sector in used_sectors and impact < 8: continue # RULE #15 diversity

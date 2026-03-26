@@ -15,6 +15,7 @@ class NSESource:
         logger.info("Fetching data from NSE Source...")
         try:
             announcements = self.client.get_announcements()
+            logger.info(f"NSE API returned {len(announcements)} raw items.")
             results = []
             for ann in announcements:
                 # Use Subject as Headline for better uniqueness and context

@@ -2,6 +2,7 @@ import requests
 import time
 import logging
 import random
+from datetime import datetime, timedelta
 from nse_monitor.config import HEADERS, NSE_BASE_URL, NSE_API_URL, USER_AGENTS
 
 logger = logging.getLogger(__name__)
@@ -56,12 +57,14 @@ class NSEClient:
     def get_announcements(self):
         """Fetches latest announcements with identity rotation on 403."""
         try:
+            # RULE #3: 2-Day Lookback for testing/stability
+            from_date = (datetime.now() - timedelta(days=2)).strftime("%d-%m-%Y")
             params = {
                 "index": "equities",
-                "from_date": time.strftime("%d-%m-%Y"),
+                "from_date": from_date,
                 "to_date": time.strftime("%d-%m-%Y")
             }
-            logger.info(f"Fetching announcements (Attempting to hit API)...")
+            logger.info(f"Fetching announcements from {from_date} (Attempting to hit API)...")
             response = self.session.get(NSE_API_URL, params=params, timeout=15)
             
             if response.status_code in [401, 403]:
