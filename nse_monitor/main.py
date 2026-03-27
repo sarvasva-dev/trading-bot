@@ -81,6 +81,9 @@ class MarketIntelligenceSystem:
             BulkDealSource()
         ]
         
+        # v15.0: Memory for Thematic Clustering (headline_hash -> timestamp)
+        self.alert_memory = {}
+        
         # RULE #18: Threaded Telegram Handler
         self.bot.register_menu_commands()
         self.update_thread = threading.Thread(target=self._update_polling_loop, daemon=True)
@@ -290,17 +293,46 @@ class MarketIntelligenceSystem:
                     item["summary"] += f"\n[FILING]: {text[:3000]}"
                     self.db.update_news_summary(item["db_id"], item["summary"])
 
-            # AI Institutional Logic (22 Rules)
-            analysis = self.llm_processor.analyze_single_event([item], market_status="OPEN" if market_on else "CLOSED")
+            # v15.0: Deep Intelligence Filtering (Tiered Logic)
+            analysis = self.llm_processor.analyze_single_event(
+                [item], 
+                market_status="OPEN" if market_on else "CLOSED",
+                source_name=item.get("source", "NSE")
+            )
             
             if not analysis:
                 logger.error(f"❌ [AI FAILURE] {item.get('symbol', 'N/A')}: LLM returned None or parse error.")
                 continue
                 
-            if not analysis.get("valid_event"): 
-                logger.info(f"⏩ [AI SKIP] {item.get('symbol', 'N/A')}: Filtered by AI (Invalid/Concluded).")
+            # RULE #15: Tiered Thresholding
+            score = analysis.get("impact_score", 0)
+            is_official = item.get("source") == "NSE"
+            required_score = 5 if is_official else 8
+            
+            if not analysis.get("valid_event") or score < required_score:
+                logger.info(f"Rejected: {item.get('headline')[:50]}... | Score: {score} | Req: {required_score}")
+                continue
+
+            # v15.0: Thematic Clustering (Deduplication 2.0)
+            # Check if this company already had a high-impact alert in the last 60 mins
+            symbol = analysis.get("symbol", "GENERIC")
+            now_ts = time.time()
+            
+            # Clean up old memory (older than 60 mins)
+            self.alert_memory = {k: v for k, v in self.alert_memory.items() if now_ts - v < 3600}
+            
+            if symbol != "N/A" and symbol in self.alert_memory:
+                logger.info(f"Clustering: Suppressing duplicate alert for {symbol} (Sent {int((now_ts - self.alert_memory[symbol])/60)}m ago)")
                 continue
             
+            # Register in memory
+            if symbol != "N/A":
+                self.alert_memory[symbol] = now_ts
+                
+            # 4. Dispatch
+            self.bot.send_signal(item, analysis)
+            processed_count += 1
+            alert_sent = True
             import nse_monitor.config as config
             impact = analysis.get("impact_score", 0)
             sentiment = analysis.get("sentiment", "Neutral")

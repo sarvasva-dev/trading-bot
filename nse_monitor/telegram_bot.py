@@ -671,23 +671,28 @@ class TelegramBot:
                 logger.error(f"Failed to send report to {chat_id}: {e}")
         logger.info(f"Broadcasted report to {len(active_users)} active users.")
 
-    def send_alert(self, data):
-        """Sends a high-precision market alert with SEBI disclaimer."""
-        if not self.token or not self.chat_ids: return
+    def send_signal(self, item, analysis):
+        """v15.0: Enhanced Signal Dispatcher with Big Ticket Badges and Source Awareness."""
+        if not self.token or not self.chat_ids: return False
 
-        report = data.get("ai_report") or {}
-        symbol = html.escape(str(data.get("symbol", "N/A")))
-        trigger = html.escape(str(data.get("trigger", "N/A")))
+        symbol = html.escape(str(analysis.get("symbol", "N/A")))
+        trigger = html.escape(str(analysis.get("trigger", "N/A")))
+        impact_score = analysis.get("impact_score", 0)
+        sentiment = html.escape(str(analysis.get("sentiment", "Neutral")))
+        is_big_ticket = analysis.get("is_big_ticket", False)
+        source = item.get("source", "NSE").upper()
         
-        impact_score = data.get("impact_score", "N/A")
-        sentiment = html.escape(str(data.get("sentiment", "Neutral")))
-        url = data.get("url")
+        url = item.get("url")
         if url and not url.startswith("http"):
             url = f"https://nsearchives.nseindia.com/corporate/{url}"
 
-        # RULE #21: Precision Format
+        # v15.0: Visual Polish
+        header = f"🛰️ <b>[{source}] {symbol.upper()}</b>"
+        if is_big_ticket:
+            header = f"🔥 <b>BIG TICKET: [{source}] {symbol.upper()}</b>"
+
         message = (
-            f"🛰️ <b>{symbol.upper()}</b> | Signal Engine\n"
+            f"{header} | Signal Engine\n"
             f"────────────────────────\n"
             f"🎯 <b>TRIGGER:</b> {trigger}\n"
             f"📊 <b>IMPACT:</b> {impact_score}/10\n"

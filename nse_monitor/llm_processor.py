@@ -39,7 +39,7 @@ class LLMProcessor:
         else:
             logger.error("SARVAM_API_KEY is missing in config.py")
 
-    def analyze_single_event(self, event_group, market_status="CLOSED"):
+    def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
         """
         Analyzes a single event group using the 22-rule High-Precision Engine.
         """
@@ -50,24 +50,36 @@ class LLMProcessor:
         context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news['summary']}"
         
         # RULE #2: Persona | RULES #5-13, #16: Institutional logic
+        # RULE #15: Source-Aware Tiered Intelligence
+        source_bias = ""
+        if source_name != "NSE":
+            source_bias = "NOTE: This news is from a MEDIA SOURCE (ET/MC). Be EXTREMELY STRICT. Reject unless it is a definitive market-moving event."
+        
+        # RULE #22: Crore-Value Injection
+        amount_found = self._extract_amount(context_text)
+        amount_hint = f"DETECTED AMOUNT: {amount_found}" if amount_found else ""
+
         prompt = f"""
 ROLE: Lead Quantitative Strategist (NSE Institutional Desk)
-TASK: Analyze this NSE Corporate Filing for IMMEDIATE market impact.
+TASK: Analyze this market news for IMMEDIATE institutional impact.
 
 22-RULE INSTITUTIONAL LOGIC:
 1. NO-FOMO POLICY: If the news describes an event that has ALREADY occurred or concluded, reject it (impact_score: 0).
 2. FORWARD-LOOKING ONLY: Focus on future triggers (Orders, Deals, Mergers, FDA, Earnings surprises).
-3. CRORE-VALUE THRESHOLD: Orders must be >50Cr (Smallcap) or >500Cr (Largecap).
-4. IMPACT SCORING (1-10):
-   - 9-10: Game Changer (Merger, Massive Order).
-   - 7-8: High Impact (Strong Earnings, FDA).
-   - <7: Routine/Compliance (REJECT).
+3. SOURCE-AWARE THRESHOLD: 
+   - NSE Filings (Official): Score >= 5 is considered significant.
+   - Media (ET/Moneycontrol): Score >= 8 is mandatory for alert.
+4. CRORE-VALUE MULTIPLIER: If the deal value is >500Cr, boost its importance.
+
+{source_bias}
+{amount_hint}
 
 EXCLUSIONS (Score 0): Board meets (general), Shareholding updates, Trading window, Resignations (except CEO/CFO).
 
 MARKET STATUS: {market_status}
+SOURCE TYPE: {source_name}
 
-FILING DATA:
+FILING/NEWS DATA:
 {context_text}
 
 OUTPUT FORMAT (STRICT JSON ONLY):
@@ -76,6 +88,7 @@ OUTPUT FORMAT (STRICT JSON ONLY):
   "symbol": "STOCK_SYMBOL",
   "trigger": "Short 1-line trigger",
   "impact_score": integer (1-10),
+  "is_big_ticket": boolean (True if deal > 100Cr),
   "sentiment": "Bullish/Bearish/Neutral",
   "sector": "SECTOR_NAME",
   "expected_move": "Intraday/Positional",
@@ -145,6 +158,12 @@ OUTPUT FORMAT (STRICT JSON ONLY):
             # 5. Last Resort: Regex Extraction for critical fields
             logger.error("JSON Parse failed after repair. Attempting Regex extraction...")
             return self._regex_extract(json_str)
+
+    def _extract_amount(self, text):
+        """Helper to find Crore/Billion values for AI hint."""
+        if not text: return None
+        matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:Cr|Crore|Billion|Million|Rs|INR)', text, re.IGNORECASE)
+        return ", ".join(matches) if matches else None
 
     def _regex_extract(self, text):
         """Last-ditch effort to get fields if JSON is totally broken."""
