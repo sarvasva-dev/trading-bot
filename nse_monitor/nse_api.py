@@ -57,8 +57,11 @@ class NSEClient:
     def get_announcements(self):
         """Fetches latest announcements with identity rotation on 403."""
         try:
-            # RULE #3: 2-Day Lookback for testing/stability
-            from_date = (datetime.now() - timedelta(days=2)).strftime("%d-%m-%Y")
+            # RULE #3: 1-Day Lookback using IST for precision (v13.0)
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+            from_date = (now_ist - timedelta(days=1)).strftime("%d-%m-%Y")
             params = {
                 "index": "equities",
                 "from_date": from_date,
@@ -78,3 +81,31 @@ class NSEClient:
         except Exception as e:
             logger.error(f"Error fetching announcements: {e}")
             raise
+
+    def get_json(self, url, params=None, referer=None):
+        """Generic robust JSON fetcher for any NSE API endpoint."""
+        headers = {}
+        if referer:
+            headers["Referer"] = referer
+            
+        try:
+            response = self.session.get(url, params=params, headers=headers, timeout=15)
+            
+            # Handle 403/401 with identity rotation
+            if response.status_code in [401, 403]:
+                logger.warning(f"Access denied (403) for {url}. Rotating identity...")
+                self._init_session()
+                response = self.session.get(url, params=params, headers=headers, timeout=15)
+                
+            if response.status_code != 200:
+                logger.error(f"NSE API Error {response.status_code} for {url}")
+                return None
+                
+            if not response.text.strip():
+                logger.warning(f"NSE API returned empty response for {url}")
+                return None
+                
+            return response.json()
+        except Exception as e:
+            logger.error(f"NSE API Request Failed ({url}): {e}")
+            return None

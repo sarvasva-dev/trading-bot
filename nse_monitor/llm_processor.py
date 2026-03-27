@@ -88,8 +88,6 @@ OUTPUT FORMAT (STRICT JSON ONLY):
     def _run_prompt(self, prompt):
         try:
             # Call Sarvam
-            # logger.debug("Attempting AI processing via Sarvam...")
-            
             response = self.sarvam_client.chat.completions(
                 model="sarvam-30b",
                 messages=[
@@ -99,26 +97,74 @@ OUTPUT FORMAT (STRICT JSON ONLY):
             )
             content_raw = response.choices[0].message.content
             
-            # Check for empty response
             if not content_raw: 
                 logger.warning("Sarvam returned empty response.")
                 return None
             
-            # Clean markdown code blocks if present
-            content_cleaned = content_raw.replace("```json", "").replace("```", "").strip()
-            
-            # Attempt JSON extraction
-            match = re.search(r"\{.*\}", content_cleaned, re.DOTALL)
-            if match:
-                json_str = match.group(0)
-                return json.loads(json_str)
-            else:
-                logger.warning(f"Sarvam output not valid JSON: {content_cleaned[:50]}...")
-                return None
+            # Robust JSON Extraction (Rule #22 Hardening)
+            return self._robust_json_parse(content_raw)
             
         except Exception as e:
-            logger.error(f"Sarvam AI failed: {e}")
+            logger.error(f"Sarvam AI failed: {e}", exc_info=True)
             return None
+
+    def _robust_json_parse(self, raw_text):
+        """Extracts and repairs JSON from LLM output, handling truncation and noise."""
+        if not raw_text: return None
+        
+        cleaned = raw_text.strip()
+        
+        # 1. Strip Markdown
+        if "```" in cleaned:
+            cleaned = re.sub(r"```json|```", "", cleaned).strip()
+            
+        # 2. Find first { and last }
+        start = cleaned.find("{")
+        if start == -1:
+            logger.warning(f"No JSON start found in: {cleaned[:100]}...")
+            return None
+            
+        # Try to find last }
+        end = cleaned.rfind("}")
+        
+        # 3. Handle Truncation: If no closing brace, try to repair
+        if end == -1 or end < start:
+            logger.warning("Truncated JSON detected. Attempting repair...")
+            json_str = cleaned[start:]
+            # Basic repair: Add missing closing brace
+            json_str += "\n}"
+        else:
+            json_str = cleaned[start:end+1]
+            
+        # 4. Clean trailing commas (common in AI output)
+        json_str = re.sub(r",\s*([\]\}])", r"\1", json_str)
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # 5. Last Resort: Regex Extraction for critical fields
+            logger.error("JSON Parse failed after repair. Attempting Regex extraction...")
+            return self._regex_extract(json_str)
+
+    def _regex_extract(self, text):
+        """Last-ditch effort to get fields if JSON is totally broken."""
+        try:
+            valid = "true" in text.lower()
+            symbol_match = re.search(r'"symbol":\s*"([^"]+)"', text)
+            score_match = re.search(r'"impact_score":\s*(\d+)', text)
+            trigger_match = re.search(r'"trigger":\s*"([^"]+)"', text)
+            
+            if symbol_match and score_match:
+                return {
+                    "valid_event": valid,
+                    "symbol": symbol_match.group(1),
+                    "impact_score": int(score_match.group(1)),
+                    "trigger": trigger_match.group(1) if trigger_match else "Analysis Success (Regex Extracted)",
+                    "sentiment": "Neutral",
+                    "summary": "Full analysis failed, but critical parameters recovered."
+                }
+        except: pass
+        return None
 
     def summarize_morning_batch(self, analyzed_items):
         """

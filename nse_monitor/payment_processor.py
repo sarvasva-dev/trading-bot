@@ -50,14 +50,16 @@ class RazorpayProcessor:
                 "callback_method": "get"
             }
             
+            logger.info(f"Generating Razorpay Link for {chat_id} | Plan: {plan_type}")
             pl = self.client.payment_link.create(payload)
+            logger.info(f"✅ Success: Razorpay Link Generated: {pl['id']}")
             return {
                 "id": pl["id"],
                 "short_url": pl["short_url"],
                 "days": plan["days"]
             }
         except Exception as e:
-            logger.error(f"Error creating Razorpay link: {e}")
+            logger.error(f"❌ Error creating Razorpay link: {e}", exc_info=True)
             return None
 
     def verify_payment_status(self, pl_id):

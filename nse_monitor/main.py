@@ -63,13 +63,15 @@ class MarketIntelligenceSystem:
     def __init__(self):
         logger.info("Initializing Signal Engine v11.0 (Admin Mastery)...")
         self.db = Database()
-        self.bot = TelegramBot(db=self.db)
+        from nse_monitor.nse_api import NSEClient
+        self.nse_client = NSEClient()
+        self.bot = TelegramBot(db=self.db, nse_client=self.nse_client)
         self.pdf_processor = PDFProcessor()
         self.llm_processor = LLMProcessor()
         self.report_builder = ReportBuilder(self.bot, self.db, self.llm_processor)
 
         # RULE #1: NSE ONLY (Primary Institutional Intel)
-        self.sources = [NSESource()]
+        self.sources = [NSESource(client=self.nse_client)]
         
         # RULE #18: Threaded Telegram Handler
         self.bot.register_menu_commands()
@@ -283,8 +285,12 @@ class MarketIntelligenceSystem:
             # AI Institutional Logic (22 Rules)
             analysis = self.llm_processor.analyze_single_event([item], market_status="OPEN" if market_on else "CLOSED")
             
-            if not analysis or not analysis.get("valid_event"): 
-                logger.info(f"⏩ [AI SKIP] {item.get('symbol', 'N/A')}: Concluded/Invalid Item.")
+            if not analysis:
+                logger.error(f"❌ [AI FAILURE] {item.get('symbol', 'N/A')}: LLM returned None or parse error.")
+                continue
+                
+            if not analysis.get("valid_event"): 
+                logger.info(f"⏩ [AI SKIP] {item.get('symbol', 'N/A')}: Filtered by AI (Invalid/Concluded).")
                 continue
             
             import nse_monitor.config as config

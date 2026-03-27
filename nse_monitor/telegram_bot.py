@@ -12,10 +12,11 @@ from nse_monitor.payment_processor import RazorpayProcessor
 logger = logging.getLogger(__name__)
 
 class TelegramBot:
-    def __init__(self, db=None):
+    def __init__(self, db=None, nse_client=None):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self.db = db
+        self.nse_client = nse_client
         self.payment_processor = RazorpayProcessor()
         self.chat_ids = [] # Use list for append/ordering
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
@@ -462,16 +463,18 @@ class TelegramBot:
         """Fetches real-time NSE Bulk & Block Deal data (v12.0)."""
         self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals from NSE...</b>")
         try:
-            import requests as req
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://www.nseindia.com/market-data/bulk-deals"
-            }
-            # Get NSE cookies first
-            s = req.Session()
-            s.get("https://www.nseindia.com", headers=headers, timeout=8)
-            r = s.get("https://www.nseindia.com/api/bulk-deal-live", headers=headers, timeout=8)
-            data = r.json()
+            if not self.nse_client:
+                self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
+                return
+                
+            url = "https://www.nseindia.com/api/bulk-deal-live"
+            referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
+            
+            data = self.nse_client.get_json(url, referer=referer)
+            if not data:
+                self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>\nTry again during market hours.")
+                return
+                
             deals = data.get("data", [])
             
             if not deals:
@@ -500,20 +503,20 @@ class TelegramBot:
         """Fetches NSE Corporate Action Calendar (v12.0)."""
         self._send_raw(chat_id, "⏳ <b>Fetching NSE Corporate Calendar...</b>")
         try:
-            import requests as req
-            from datetime import datetime, timedelta
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-actions"
-            }
-            s = req.Session()
-            s.get("https://www.nseindia.com", headers=headers, timeout=8)
-            
+            if not self.nse_client:
+                self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
+                return
+                
             today = datetime.now().strftime("%d-%m-%Y")
             end = (datetime.now() + timedelta(days=14)).strftime("%d-%m-%Y")
             url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={today}&to_date={end}&csv=false"
-            r = s.get(url, headers=headers, timeout=8)
-            data = r.json()
+            referer = "https://www.nseindia.com/companies-listing/corporate-filings-actions"
+            
+            data = self.nse_client.get_json(url, referer=referer)
+            if not data:
+                self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>")
+                return
+                
             actions = data if isinstance(data, list) else data.get("data", [])
             
             if not actions:
@@ -547,23 +550,47 @@ class TelegramBot:
     # NOTE: _handle_subscribe_menu is defined at line ~310 (dynamic version). Duplicate removed.
 
     def _handle_plan_selection(self, chat_id, text, first_name):
-        """Generates link for selected plan and saves for auto-verification."""
+        """Generates link for selected plan and saves for auto-verification in a separate thread."""
         plan_type = text.replace("/sub_", "")
-        self._send_raw(chat_id, f"⌛ <b>Generating link for ₹{plan_type} plan...</b>")
-        link_data = self.payment_processor.create_payment_link(chat_id, plan_type, first_name)
-        if link_data:
-            # RULE #24: Save for background poller
-            if self.db:
-                self.db.save_payment_link(link_data['id'], chat_id, link_data['days'])
+        logger.info(f"Plan selection request: {plan_type} by {chat_id}")
+        self._send_raw(chat_id, f"⌛ <b>Generating secure payment link for ₹{plan_type} plan...</b>")
+        
+        # Offload to thread to prevent UI hang on Razorpay API delays
+        import threading
+        thread = threading.Thread(
+            target=self._generate_link_threaded, 
+            args=(chat_id, plan_type, first_name),
+            daemon=True
+        )
+        thread.start()
+
+    def _generate_link_threaded(self, chat_id, plan_type, first_name):
+        """Background thread worker for payment link creation."""
+        try:
+            link_data = self.payment_processor.create_payment_link(chat_id, plan_type, first_name)
+            
+            if link_data:
+                # RULE #24: Save for background poller (Fixed args to match DB schema)
+                if self.db:
+                    self.db.save_payment_link(
+                        chat_id=chat_id,
+                        pl_id=link_data["id"],
+                        amount=int(plan_type),
+                        days=link_data["days"]
+                    )
                 
-            msg = (
-                f"🔗 <b>Your Payment Link is Ready:</b>\n{link_data['short_url']}\n\n"
-                f"⚡ <b>Auto-Activation:</b> Your premium access will be activated <b>automatically</b> "
-                f"within 1-2 minutes of payment. No further action needed!"
-            )
-            self._send_raw(chat_id, msg)
-        else:
-            self._send_raw(chat_id, "❌ Error generating link. Please try later.")
+                msg = (
+                    f"🔗 <b>Your Payment Link is Ready:</b>\n{link_data['short_url']}\n\n"
+                    f"✅ Credits will be added automatically within 1-2 mins after payment.\n\n"
+                    f"⚠️ <i>Please do not close the payment page until you see the success message.</i>"
+                )
+                self._send_raw(chat_id, msg)
+            else:
+                self._send_raw(chat_id, "❌ <b>Payment Service Busy.</b>\nPlease try generating the link again in a few minutes.")
+                
+        except Exception as e:
+            logger.error(f"Threaded link generation failed: {e}", exc_info=True)
+            self._send_raw(chat_id, "⚠️ <b>System Error.</b>\nOur payment partner is unreachable. Please contact support.")
 
     def _handle_manual_verify(self, chat_id):
         """Triggered by the /verify command (Rule #24)."""

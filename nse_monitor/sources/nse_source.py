@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 class NSESource:
     NAME = "NSE"
 
-    def __init__(self):
-        self.client = NSEClient()
+    def __init__(self, client=None):
+        self.client = client or NSEClient()
 
     def fetch(self):
         """Fetches latest corporate announcements from NSE."""
