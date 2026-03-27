@@ -82,19 +82,26 @@ class NSEClient:
             logger.error(f"Error fetching announcements: {e}")
             raise
 
-    def get_json(self, url, params=None, referer=None):
+    def get_json(self, url, params=None, referer=None, warmup=None):
         """Generic robust JSON fetcher for any NSE API endpoint."""
-        headers = {}
+        headers = self.headers.copy()
         if referer:
             headers["Referer"] = referer
             
         try:
+            # 1. Warm up if needed (Visit the parent page first)
+            if warmup:
+                self.session.get(warmup, headers=headers, timeout=10)
+                
+            # 2. Extract JSON
             response = self.session.get(url, params=params, headers=headers, timeout=15)
             
-            # Handle 403/401 with identity rotation
+            # 3. Handle 403/401 with identity rotation
             if response.status_code in [401, 403]:
                 logger.warning(f"Access denied (403) for {url}. Rotating identity...")
                 self._init_session()
+                if warmup: 
+                    self.session.get(warmup, headers=headers, timeout=10)
                 response = self.session.get(url, params=params, headers=headers, timeout=15)
                 
             if response.status_code != 200:
@@ -103,7 +110,10 @@ class NSEClient:
                 
             if not response.text.strip():
                 logger.warning(f"NSE API returned empty response for {url}")
-                return None
+                # Try one more time with a fresh session
+                self._init_session()
+                response = self.session.get(url, params=params, headers=headers, timeout=15)
+                if not response.text.strip(): return None
                 
             return response.json()
         except Exception as e:

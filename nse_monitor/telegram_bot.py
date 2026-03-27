@@ -467,10 +467,11 @@ class TelegramBot:
                 self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
                 return
                 
-            url = "https://www.nseindia.com/api/bulk-deal-live"
+            # Correct Endpoint (Rule #22 Mastery)
+            url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
             referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
             
-            data = self.nse_client.get_json(url, referer=referer)
+            data = self.nse_client.get_json(url, referer=referer, warmup="https://www.nseindia.com/report-search/equities")
             if not data:
                 self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>\nTry again during market hours.")
                 return
@@ -507,12 +508,15 @@ class TelegramBot:
                 self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
                 return
                 
-            today = datetime.now().strftime("%d-%m-%Y")
-            end = (datetime.now() + timedelta(days=14)).strftime("%d-%m-%Y")
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+            today = now_ist.strftime("%d-%m-%Y")
+            end = (now_ist + timedelta(days=14)).strftime("%d-%m-%Y")
             url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={today}&to_date={end}&csv=false"
             referer = "https://www.nseindia.com/companies-listing/corporate-filings-actions"
             
-            data = self.nse_client.get_json(url, referer=referer)
+            data = self.nse_client.get_json(url, referer=referer, warmup="https://www.nseindia.com/companies-listing/corporate-filings-actions")
             if not data:
                 self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>")
                 return
@@ -573,9 +577,8 @@ class TelegramBot:
                 # RULE #24: Save for background poller (Fixed args to match DB schema)
                 if self.db:
                     self.db.save_payment_link(
+                        link_id=link_data["id"],
                         chat_id=chat_id,
-                        pl_id=link_data["id"],
-                        amount=int(plan_type),
                         days=link_data["days"]
                     )
                 
