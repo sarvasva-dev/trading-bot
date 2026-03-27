@@ -186,7 +186,8 @@ class MarketIntelligenceSystem:
                                hour=8, minute=30, id='morning_report', timezone=self.ist)
         
         # 3. User Message Polling (Every 1 Minute)
-        self.scheduler.add_job(self.bot.handle_updates, 'interval', minutes=1, id='bot_updates')
+        self.scheduler.add_job(self.bot.handle_updates, 'interval', 
+                               seconds=30, id='telegram_updates')
 
         # 4. Midnight Maintenance (00:00 IST) - Rule #24
         self.scheduler.add_job(self.daily_maintenance, 'cron', hour=0, minute=0, id='midnight_sync', timezone=self.ist)
