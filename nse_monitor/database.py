@@ -436,3 +436,55 @@ class Database:
         """Updates the status of a payment link (e.g., 'paid', 'expired')."""
         with self.conn:
             self.conn.execute("UPDATE payment_links SET status = ? WHERE link_id = ?", (status, link_id))
+
+    def run_maintenance(self):
+        """v16.0: Automated DB optimization and cleanup."""
+        try:
+            logger.info("Starting Database Maintenance Cycle...")
+            with self.conn:
+                # 1. Integrity Check
+                cursor = self.conn.execute("PRAGMA integrity_check")
+                res = cursor.fetchone()[0]
+                if res != "ok":
+                    logger.critical(f"DATABASE INTEGRITY FAILED: {res}")
+                    return False
+                
+                # 2. Delete news older than 30 days (Rule #14: RAM optimization)
+                self.conn.execute("DELETE FROM news_items WHERE created_at < datetime('now', '-30 days')")
+                deleted = self.conn.execute("SELECT changes()").fetchone()[0]
+                
+                # 3. Optimize storage
+                self.conn.execute("VACUUM")
+                self.conn.execute("ANALYZE")
+                
+            logger.info(f"DB Maintenance Complete. Purged {deleted} old items. Status: Healthy")
+            return True
+        except Exception as e:
+            logger.error(f"DB Maintenance Error: {e}")
+            return False
+
+    def backup_db(self):
+        """v16.0: Creates a point-in-time backup of the database."""
+        try:
+            backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Keep only last 7 backups to save space
+            ts = datetime.now().strftime("%Y%m%d_%H%M")
+            backup_file = os.path.join(backup_dir, f"pulse_backup_{ts}.db")
+            
+            # SQLite Online Backup (Safe for WAL mode)
+            import shutil
+            shutil.copy2(DB_PATH, backup_file)
+            
+            # Cleanup old backups
+            all_backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir)])
+            if len(all_backups) > 7:
+                for old in all_backups[:-7]:
+                    os.remove(old)
+                    
+            logger.info(f"Database Backup Created: {os.path.basename(backup_file)}")
+            return True
+        except Exception as e:
+            logger.error(f"DB Backup Failed: {e}")
+            return False

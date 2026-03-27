@@ -42,8 +42,13 @@ from nse_monitor.database import Database
 from nse_monitor.report_builder import ReportBuilder
 from nse_monitor.telegram_bot import TelegramBot
 from nse_monitor.sources.nse_source import NSESource
-from nse_monitor.pdf_processor import PDFProcessor
 from nse_monitor.llm_processor import LLMProcessor
+from nse_monitor.pdf_processor import PDFProcessor
+from nse_monitor.watchdog import BotWatchdog
+from nse_monitor.config import (
+    BOT_NAME, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID,
+    LOGS_DIR, ALERT_THRESHOLD, ROOT_DIR
+)
 from nse_monitor.sources.economic_times_source import EconomicTimesSource
 from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
 from nse_monitor.sources.bulk_deal_source import BulkDealSource
@@ -84,6 +89,10 @@ class MarketIntelligenceSystem:
         # v15.0: Memory for Thematic Clustering (headline_hash -> timestamp)
         self.alert_memory = {}
         
+        # v16.0: Watchdog (Heartbeat Monitor)
+        log_file = os.path.join(ROOT_DIR, "logs", "service.log")
+        self.watchdog = BotWatchdog(TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_BOT_TOKEN, log_file)
+        
         # RULE #18: Threaded Telegram Handler
         self.bot.register_menu_commands()
         self.update_thread = threading.Thread(target=self._update_polling_loop, daemon=True)
@@ -121,6 +130,10 @@ class MarketIntelligenceSystem:
                 try:
                     self.bot._send_expiry_reminder(chat_id)
                 except: continue
+
+        # 3. v15.5 - v16.0: Database Health & Backups
+        self.db.run_maintenance()
+        self.db.backup_db()
 
     def send_preexpiry_reminders(self):
         """Runs at 6 PM IST — warns users with exactly 1 day left to renew."""
@@ -176,7 +189,10 @@ class MarketIntelligenceSystem:
 
     def start(self):
         """Initializes all polling and reporting jobs."""
-        logger.info(f"Initializing {BOT_NAME} Schedule (v12.0)...")
+        logger.info(f"Initializing {BOT_NAME} Schedule (v16.0)...")
+        
+        # v16.0: Start Watchdog Thread
+        self.watchdog.start()
         
         # 1. Market Intel Polling (Every 3 Minutes)
         self.scheduler.add_job(self.safe_run_cycle, 'interval', minutes=3, id='market_cycle')
@@ -212,6 +228,7 @@ class MarketIntelligenceSystem:
     def run_cycle(self):
         """High-precision analysis cycle."""
         logger.info("Starting intelligence cycle...")
+        self.watchdog.heartbeat() # v16.0 Pulse
         
         # 1. Fetching
         raw_items = []
