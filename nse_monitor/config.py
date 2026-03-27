@@ -64,7 +64,7 @@ HEADERS = {
 # --- PRODUCTION ALERT CONTROLS ---
 # Minimum impact score (0-10) to trigger a Telegram alert
 # Set to 7 to filter out noise like ESOPs, routine filings
-ALERT_THRESHOLD = 7
+ALERT_THRESHOLD = 5
 
 # Maximum alerts to send per hour to avoid spamming/Telegram limits
 MAX_ALERTS_PER_HOUR = 5

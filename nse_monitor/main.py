@@ -44,6 +44,9 @@ from nse_monitor.telegram_bot import TelegramBot
 from nse_monitor.sources.nse_source import NSESource
 from nse_monitor.pdf_processor import PDFProcessor
 from nse_monitor.llm_processor import LLMProcessor
+from nse_monitor.sources.economic_times_source import EconomicTimesSource
+from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
+from nse_monitor.sources.bulk_deal_source import BulkDealSource
 
 # Logging Setup
 def ist_time(*args):
@@ -70,8 +73,13 @@ class MarketIntelligenceSystem:
         self.llm_processor = LLMProcessor()
         self.report_builder = ReportBuilder(self.bot, self.db, self.llm_processor)
 
-        # RULE #1: NSE ONLY (Primary Institutional Intel)
-        self.sources = [NSESource(client=self.nse_client)]
+        # RULE #1: NSE ONLY (Primary Institutional Intel) | RULE #14: Multi-Source Support
+        self.sources = [
+            NSESource(client=self.nse_client),
+            EconomicTimesSource(),
+            MoneycontrolSource(),
+            BulkDealSource()
+        ]
         
         # RULE #18: Threaded Telegram Handler
         self.bot.register_menu_commands()
