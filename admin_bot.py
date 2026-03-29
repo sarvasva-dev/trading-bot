@@ -508,7 +508,7 @@ class AdminPanel:
 
     def _handle_pulse(self, chat_id):
         """v1.3.3: High-resolution system health & pulse monitoring."""
-        self._send_raw(chat_id, "🔍 <b>Fetching Industrial Pulse...</b>")
+        self._send(chat_id, "🔍 <b>Fetching Industrial Pulse...</b>")
         
         # 1. Uptime calculation
         try:
@@ -553,7 +553,7 @@ class AdminPanel:
             f"📍 <i>Server Time: {datetime.now().strftime('%H:%M:%S')}</i>"
         )
         
-        self._send_raw(chat_id, msg)
+        self._send(chat_id, msg)
 
 if __name__ == "__main__":
     AdminPanel().run()
