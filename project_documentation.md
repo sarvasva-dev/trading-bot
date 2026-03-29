@@ -1,4 +1,4 @@
-# 🚀 Market Pulse (NSE2) - Complete Project Documentation (A-Z)
+# 🚀 Market Pulse (NSE2) v1.1 - Complete Project Documentation (A-Z)
 
 Aapka ye project ek **High-Precision Market Intelligence System** hai jo NSE (National Stock Exchange) ki announcements ko real-time mein scan karke, AI ki madad se filter karta hai aur sirf kaam ki khabar (High Impact signals) subscribers tak pahunchata hai.
 
@@ -10,31 +10,30 @@ Is document mein hum har ek chhoti-badi cheez ko bahut hi asaan bhasha mein samj
 
 Bot ka basic kaam 4 steps mein pura hota hai:
 
-1.  **Fetching (Data nikaalna)**: Har 3 minute mein bot NSE ki website par jaakar dekhta hai ki kisi company ne koi nayi "Announcement" ya "Filing" dali hai ya nahi.
-2.  **Filtering (Kachra saaf karna)**: NSE par roz hazaron filings aati hain. Bot routine cheezon ko (jaise Board Meeting, Address change, Shareholding update) turant discard kar deta hai.
-3.  **AI Analysis (Dimag lagana)**: Agar koi "Interest" wali khabar milti hai (jaise koi bada Order ya Merger), toh bot uska PDF download karta hai, text nikaalta hai, aur **Sarvam AI** ko bhejta hai.
-4.  **Alerting (Khabar dena)**: AI ussey **1 se 10** ke beech mein ek **Impact Score** deta hai. Agar score **7 se bada** hai, toh bot turant premium users ko Telegram par message bhej deta hai.
+1.  **Fetching (Data nikaalna)**: Har 3 minute mein bot NSE ki website (Proxy rotation ke saath) par check karta hai. Sab kuch ek **Zero-Loss Queue** (Database) mein save hota hai taaki kuch miss na ho.
+2.  **Filtering (Kachra saaf karna)**: Routine filings ko exclude karke, sirf core news ko process queue mein daala jata hai.
+3.  **AI Analysis (Dimag lagana)**: Bot parallel tareeqe se (4 khabrein ek saath) PDF download karta hai. Agar PDF photo hai (scanned), toh **Tesseract OCR (Vision)** use hota hai. Fir data **Sarvam 105b-32k AI Model** ko diya jata hai.
+4.  **Alerting (Khabar dena)**: AI 22-Rules pakad kar **1 se 10** ke beech **Impact Score** deta hai. Badi khabar hone par turant Telegram par premium users ko link and tags ("SME" / "Big Ticket") ke saath bhejta hai.
 
 ---
 
 ## 📑 2. Detailed Internal Components (Har Part Ka Kaam)
 
-### A. Core Engine ([main.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/main.py))
+### A. Core Engine (`main.py`)
 Ye bot ka "Sanchalak" (manager) hai.
-- Ye check karta hai ki market open hai ya nahi ([is_market_hours](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/main.py#88-92)).
-- Ye scheduling sambhalta hai (subah ki report kab jayegi, maintenance kab hogi).
-- **Rule of 4**: Ek cycle mein 4 se zyada alerts nahi bhejta taaki spam na ho.
+- Ye `ThreadPoolExecutor` use karke **4 AI analysis threads** ek saath chalata hai, jisse bot 4x fast ho gaya hai.
+- Naya **Watchdog system** lagaya gaya hai; agar bot loop hang ho toh auto restart (`os._exit`) trigger karta hai.
 
-### B. NSE API Client ([nse_api.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/nse_api.py))
-Ye bot ki "Aankhein" hain.
-- NSE ki website se block naa hone ke liye ye har baar apna "ID" (User-Agent) badalta hai.
-- NSE Archive se PDF download karne ki taqat ismein hai.
+### B. Security & Data Scrapers
+- **NSE API Client (`nse_api.py`)**: NSE website se data nikalne wala engine.
+- **Proxy Manager (`proxy_manager.py`)**: Anti-Ban system. Har NSE scan ya PDF download se pehle ek zinda Indian HTTPS proxy fetch karke lagata hai, jisse bot kabhi IP block nahi hota.
+- **Vision Engine (`pdf_processor.py`)**: Filings padhne ka module. Scanned documents ko `pytesseract` image-to-text se decode karta hai.
 
-### C. Database ([database.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/database.py)) - Storage
-Bot ki "Yaaddaasht" (memory). Ismein 3 main tables hain:
-1.  **News Items**: Aaj tak ki saari khabrein aur unka AI score.
+### C. Database (`database.py`) - Storage & Queue
+Bot ki "Yaaddaasht". Isme ek Hard `threading.Lock()` hai taaki backend kabhi corrupt na ho:
+1.  **News Items (Queue)**: Aaj tak ki saari khabrein `status=0` (Pending) par aati hain, process hoti hain, aur `status=1/2` mein move hoti hain.
 2.  **Users**: Kaun premium hai, kiske kitne din bache hain.
-3.  **Payment Links**: Razorpay se generate kiye gaye links ka status.
+3.  **Payment Links**: Razorpay IDs ka hisab.
 
 ### D. User Bot & Admin Bot
 - **User Bot ([telegram_bot.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/telegram_bot.py))**: Ye subscribers se baat karta hai. Balance dikhana, recharge link dena, aur signals bhejna iska kaam hai.
@@ -80,15 +79,34 @@ Ye bot traditional monthly billing nahi karta. Ye sirf **Trading Days** count ka
 - **Security**: Admin access sirf password se milti hai.
 
 ---
-### 🚦 Dataflow Diagram (Diagrammatic View)
+### 🚦 v1.1 Dataflow Diagram (Architectural View)
 
 ```mermaid
-graph LR
-    NSE[NSE Website] -->|Fetch Filings| Main[Main Engine]
-    Main -->|Filter News| AI[Sarvam AI Brain]
-    AI -->|Score > 7| DB[(SQLite DB)]
-    DB -->|Trigger| Bot[Telegram Bot]
-    Bot -->|Signal| User((Subscribers))
+graph TD
+    subgraph "External Sources"
+        NSE[NSE Website]
+        Proxy[ProxyScrape API]
+    end
+
+    subgraph "Data Ingestion (Anti-Fragile)"
+        Proxy -->|Indian IP| Client[NSE API Client]
+        NSE -->|Data via Proxy| Client
+        Client -->|Raw Filings| Filter[Noise Filter]
+        Filter -->|Valuable News| DBQueue[(Zero-Loss SQLite DB)]
+    end
+
+    subgraph "Concurrency Engine"
+        DBQueue -->|Batch of 4| Threads[4 ThreadPool Workers]
+        Threads -->|Fetch PDF| Vision[PDF & OCR Engine]
+        Vision -->|Clean Text| Sarvam[Sarvam 105b-32k AI]
+    end
+
+    subgraph "Output Matrix"
+        Sarvam -->|Rule 22 Output| DBLock[Global DB Lock]
+        DBLock -->|Update Queue Status| DBQueue
+        Sarvam -->|Score >= Alert Thresh| Broadcaster[Telegram Dispatcher]
+        Broadcaster -->|Rate-Limited MSGs| Premium((Premium Users))
+    end
 ```
 
 ---

@@ -38,7 +38,6 @@ class MarketScheduler:
         )
 
         # 2. Daily Pre-Market Multi-Source Report (08:30 IST, Mon-Fri)
-        # Now uses the new AI Batch Summarization logic
         self.scheduler.add_job(
             self.system.report_builder.generate_morning_report,
             'cron',
@@ -48,15 +47,27 @@ class MarketScheduler:
             id='pre_market_report'
         )
 
-        # 3. Dynamic User Update Handling (Every 1 minute)
+        # v1.1: Scheduled Weekly Restart for Memory Leak Prevention (Sun 02:00)
+        import os
         self.scheduler.add_job(
-            self.system.bot.handle_updates,
-            'interval',
-            minutes=1,
-            id='telegram_updates'
+            lambda: os._exit(0),
+            'cron',
+            day_of_week='sun',
+            hour=2,
+            minute=0,
+            id='weekly_memory_flush'
         )
 
-        logger.info("Scheduler started (08:30 IST Reports | 3-Min Polling).")
+        # 3. Daily Maintenance (00:01 IST) — Billing & DB Cleanup
+        self.scheduler.add_job(
+            self.system.daily_maintenance,
+            'cron',
+            hour=0,
+            minute=1,
+            id='daily_system_maintenance'
+        )
+
+        logger.info("Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.")
         try:
             self.scheduler.start()
         except (KeyboardInterrupt, SystemExit):

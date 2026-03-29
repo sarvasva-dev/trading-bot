@@ -20,240 +20,385 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-class LLMProcessor:
-    def __init__(self):
-        # Only Sarvam AI (Indian)
-        self.sarvam_key = SARVAM_API_KEY
-        self.sarvam_client = None
-        
-        if not SarvamAI:
-             logger.error("SarvamAI SDK not installed. Please install 'sarvamai'.")
-             return
+# ─────────────────────────────────────────────────────────────────────────────
+# THE FULL 22-RULE INSTITUTIONAL PROMPT TEMPLATE (v1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+INSTITUTIONAL_PROMPT = """
+ROLE: Lead Quantitative Strategist, NSE Institutional Desk (Top-Tier Hedge Fund)
+TASK: Analyze this market news/filing with MAXIMUM PRECISION for immediate institutional impact.
 
-        if self.sarvam_key:
-            try:
-                self.sarvam_client = SarvamAI(api_subscription_key=self.sarvam_key)
-                logger.info(" AI Engine (Sarvam): Ready")
-            except Exception as e:
-                logger.error(f"Sarvam Init Error: {e}")
-        else:
-            logger.error("SARVAM_API_KEY is missing in config.py")
+══════════════════════════════════════════════════════════════
+THE 22-RULE INSTITUTIONAL INTELLIGENCE ENGINE (v1.0)
+══════════════════════════════════════════════════════════════
 
-    def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
-        """
-        Analyzes a single event group using the 22-rule High-Precision Engine.
-        """
-        if not self.sarvam_client: return None
+RULE 1 — NO-FOMO POLICY:
+  If the event has ALREADY occurred/concluded (past tense), assign impact_score: 0.
+  EXCEPTION: Dividends, Bonus Issues, and Stock Splits are VALID even if declared in the past, provided the EX-DATE is in the future.
+  Valid triggers are FUTURE-ONLY: Upcoming orders, prospective deals, pending approvals.
 
-        # RULE #17: Consolidate context
-        lead_news = event_group[0]
-        context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news['summary']}"
-        
-        # RULE #2: Persona | RULES #5-13, #16: Institutional logic
-        # RULE #15: Source-Aware Tiered Intelligence
-        source_bias = ""
-        if source_name != "NSE":
-            source_bias = "NOTE: This news is from a MEDIA SOURCE (ET/MC). Be EXTREMELY STRICT. Reject unless it is a definitive market-moving event."
-        
-        # RULE #22: Crore-Value Injection
-        amount_found = self._extract_amount(context_text)
-        amount_hint = f"DETECTED AMOUNT: {amount_found}" if amount_found else ""
+RULE 2 — FORWARD-LOOKING FILTER:
+  Keywords that indicate high-value future triggers:
+  "wins order", "bags deal", "awarded contract", "receives LOI", "signs MOU",
+  "FDA approval", "merger announced", "acquisition", "JV formation", "capacity expansion".
 
-        prompt = f"""
-ROLE: Lead Quantitative Strategist (NSE Institutional Desk)
-TASK: Analyze this market news for IMMEDIATE institutional impact.
+RULE 3 — SOURCE-AWARE INTELLIGENCE:
+  - NSE Official Filings: Trust fully. Score >= 5 is significant.
+  - Media (ET/Moneycontrol): Be EXTREMELY STRICT. Only score >= 8 if event is definitively confirmed.
+  - SME Segment: Apply same rules but flag is_sme = true.
 
-22-RULE INSTITUTIONAL LOGIC:
-1. NO-FOMO POLICY: If the news describes an event that has ALREADY occurred or concluded, reject it (impact_score: 0).
-2. FORWARD-LOOKING ONLY: Focus on future triggers (Orders, Deals, Mergers, FDA, Earnings surprises).
-3. SOURCE-AWARE THRESHOLD: 
-   - NSE Filings (Official): Score >= 5 is considered significant.
-   - Media (ET/Moneycontrol): Score >= 8 is mandatory for alert.
-4. CRORE-VALUE MULTIPLIER: If the deal value is >500Cr, boost its importance.
+RULE 4 — CRORE VALUE MULTIPLIER:
+  - Deal > 500 Cr for Large Cap: +2 boost to score.
+  - Deal > 100 Cr for Mid/SmallCap: +2 boost to score.
+  - Deal < 10 Cr: Automatic rejection unless sector-critical.
 
-{source_bias}
-{amount_hint}
+RULE 5 — CORPORATE ACTION PRECISION:
+  Accept ONLY if Ex-Date is in the FUTURE:
+  - Dividend (>5% yield of face value): Score 5-6.
+  - Bonus Issue, Stock Split: Score 6-7.
+  - Buyback (>10% of equity): Score 7-8.
+  - Rights Issue: Score 4-5.
 
-EXCLUSIONS (Score 0): Board meets (general), Shareholding updates, Trading window, Resignations (except CEO/CFO).
+RULE 6 — GOVERNANCE HIERARCHY:
+  - CEO/MD/CFO Resignation (sudden, not retirement): Score 7, Bearish.
+  - CEO/MD Appointment (new strategic hire): Score 6, Bullish.
+  - Independent Director changes: Reject (score 0).
+  - Auditor Resignation (Big 4): Score 6, Bearish.
+  - Routine shareholding/trading window: Score 0.
 
+RULE 7 — DEBT & CREDIT INTELLIGENCE:
+  - Credit Rating Upgrade (CRISIL/ICRA/CARE): Score 6, Bullish.
+  - Credit Rating Downgrade: Score 7, Bearish. URGENT.
+  - NCD/Bond issuance > 500 Cr: Score 5, Neutral.
+  - Loan default notice / NPA: Score 8, Bearish. CRITICAL.
+
+RULE 8 — LEGAL & REGULATORY:
+  - SEBI enquiry/show-cause notice: Score 7, Bearish.
+  - CBI/ED raid or arrest: Score 9, Bearish. CRITICAL.
+  - Favourable court ruling: Score 6, Bullish.
+  - Routine patent filing: Score 3, Neutral.
+
+RULE 9 — SECTOR INTELLIGENCE:
+  - Pharma: USFDA approval/rejection is HIGH IMPACT (Score 8-9).
+  - Infra/Defence: Government tender wins > 200 Cr are HIGH IMPACT (Score 7+).
+  - Banking: RBI licence grant/cancel, NPA data are CRITICAL.
+  - IT: Large Multi-year deal > 500 Cr is HIGH IMPACT.
+  - Auto: Production numbers, EV launch/partnership.
+  - Real Estate: Land acquisition > 100 Cr, RERA registration.
+
+RULE 10 — PROMOTER ACTIVITY:
+  - Promoter buying > 1% stake (Open Market): Score 6, Bullish.
+  - Promoter pledging > 20% holding: Score 7, Bearish.
+  - Promoter selling large stake: Score 7, Bearish.
+
+RULE 11 — FII/DII INTELLIGENCE:
+  - FII bulk buy > 1% equity: Score 6, Bullish.
+  - FII bulk sell > 1% equity: Score 6, Bearish.
+  - DII accumulation: Score 4, Bullish.
+
+RULE 12 — EARNINGS INTELLIGENCE:
+  - Quarterly results: Score only if PAT is > 20% surprise vs estimates.
+  - Annual results with strong guidance: Score 6-7.
+  - Profit warning / downgrade guidance: Score 7-8, Bearish.
+
+RULE 13 — JOINT VENTURES & PARTNERSHIPS:
+  - JV with Global Fortune 500 company: Score 7-8, Bullish.
+  - Strategic MOU (not binding): Score 4-5, Bullish (low confidence).
+  - Technology licencing agreement: Score 5-6, Bullish.
+
+RULE 14 — EXCLUSION LIST (Score 0 immediately):
+  Board meeting intimation, Record date for AGM, Postal ballot results,
+  Name change announcements, Registered office change, ESOP grants (routine),
+  Shareholding pattern >1%/<1% threshold crossing (unless promoter-driven),
+  Compliance certificates, Annual report filing, Demerger (if already known).
+
+RULE 15 — TIMING & MARKET STATUS CONTEXT:
+  - If MARKET OPEN and news is < 3 minutes old: MAXIMUM URGENCY. Flag time_critical = true.
+  - If MARKET OPEN and news is 3-30 minutes old: Normal urgency.
+  - If MARKET CLOSED (weekend/night): Focus on "Open Gap" potential. Flag expected_move carefully.
+
+RULE 16 — DEDUPLICATION AWARENESS:
+  If filing appears to be a duplicate or clarification of prior news, reduce score by 3.
+  Look for keywords: "correction to", "amendment to", "in continuation of".
+
+RULE 17 — MULTI-ITEM CONSOLIDATION:
+  If multiple filings from same company in the same cycle, analyze collectively.
+  Aggregate context text for a holistic view.
+
+RULE 18 — INTRADAY vs POSITIONAL CLASSIFICATION:
+  - expected_move = "Intraday" if event is a sudden shock (Legal/Governance/Pharma FDA).
+  - expected_move = "Positional" if event has multi-day duration (Order win, JV, Expansion).
+  - expected_move = "Long-Term" if event affects structural value (Merger, Buyback, Demerger).
+
+RULE 19 — GLOBAL LINKAGE:
+  Check if news is linked to global macro (e.g., US rates, China slowdown, Oil prices).
+  If yes, add global_linkage = true in output.
+
+RULE 20 — SME SEGMENT FLAG:
+  For SME segment stocks, flag is_sme = true.
+  Apply same scoring but note that liquidity is low and volatility is extreme.
+
+RULE 21 — SECTOR SENTIMENT BOOST:
+  If the sector is currently in a BULL RUN (e.g., Defence in 2024-25),
+  boost impact_score by 1 for positive triggers in that sector.
+
+RULE 22 — CRORE VALUE INJECTION:
+  Always scan the filing text for any numerical amount.
+  {amount_hint}
+
+══════════════════════════════════════════════════════════════
+CONTEXT VARIABLES
+══════════════════════════════════════════════════════════════
 MARKET STATUS: {market_status}
-SOURCE TYPE: {source_name}
+SOURCE TYPE:   {source_name}
+{source_bias}
+DETECTED DEAL AMOUNT: {amount_found}
 
 FILING/NEWS DATA:
 {context_text}
 
-OUTPUT FORMAT (STRICT JSON ONLY):
+══════════════════════════════════════════════════════════════
+OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE. NO MARKDOWN.
+══════════════════════════════════════════════════════════════
 {{
   "valid_event": boolean,
-  "symbol": "STOCK_SYMBOL",
-  "trigger": "Short 1-line trigger",
+  "symbol": "NSE_SYMBOL or UNKNOWN",
+  "trigger": "Short 1-line trigger in plain English",
   "impact_score": integer (1-10),
-  "is_big_ticket": boolean (True if deal > 100Cr),
-  "sentiment": "Bullish/Bearish/Neutral",
+  "is_big_ticket": boolean,
+  "is_sme": boolean,
+  "time_critical": boolean,
+  "global_linkage": boolean,
+  "sentiment": "Bullish | Bearish | Neutral",
   "sector": "SECTOR_NAME",
-  "expected_move": "Intraday/Positional",
-  "key_insight": "Professional insight",
+  "expected_move": "Intraday | Positional | Long-Term",
+  "key_insight": "1 professional sentence on WHY this matters",
   "summary": "2-sentence executive summary"
 }}
 """
+
+
+class LLMProcessor:
+    def __init__(self):
+        self.sarvam_key = SARVAM_API_KEY
+        self.sarvam_client = None
+
+        if not SarvamAI:
+            logger.error("SarvamAI SDK not installed. Please install 'sarvamai'.")
+            return
+
+        if self.sarvam_key:
+            try:
+                self.sarvam_client = SarvamAI(api_subscription_key=self.sarvam_key)
+                logger.info("✅ AI Engine (Sarvam): Ready — 22-Rule Mode Active")
+            except Exception as e:
+                logger.error(f"Sarvam Init Error: {e}")
+        else:
+            logger.error("SARVAM_API_KEY is missing in .env")
+
+    def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
+        """Analyzes a single event using the full 22-Rule Institutional Engine."""
+        if not self.sarvam_client:
+            return None
+
+        # Build consolidated context
+        lead_news = event_group[0]
+        context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news.get('summary', '')}"
+
+        # Rule #3: Source bias
+        source_bias = ""
+        if source_name not in ("NSE", "SME"):
+            source_bias = (
+                "⚠️ MEDIA SOURCE DETECTED: Be EXTREMELY STRICT. "
+                "Only score >= 8 if event is definitively confirmed by the article."
+            )
+
+        # Rule #22: Amount detection
+        amount_found = self._extract_amount(context_text)
+        amount_hint = (
+            f"Detected amounts in filing: {amount_found}. Apply Rule #4 accordingly."
+            if amount_found
+            else "No specific amount detected."
+        )
+
+        prompt = INSTITUTIONAL_PROMPT.format(
+            market_status=market_status,
+            source_name=source_name,
+            source_bias=source_bias,
+            amount_found=amount_found or "None detected",
+            amount_hint=amount_hint,
+            context_text=context_text
+        )
+
         return self._run_prompt(prompt)
 
     def _run_prompt(self, prompt):
         try:
-            # Call Sarvam
-            response = self.sarvam_client.chat.completions(
-                model="sarvam-30b",
+            # v2.0: Aligned with standard Sarvam/OpenAI SDK pattern (completions.create)
+            response = self.sarvam_client.chat.completions.create(
+                model="sarvam-105b-32k",
                 messages=[
-                    {"role": "system", "content": "You are a financial analyst. Return ONLY valid JSON."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a senior quantitative analyst at an Indian hedge fund. "
+                            "You MUST return ONLY valid JSON. No markdown, no prose, no explanation. "
+                            "Apply all 22 institutional rules rigorously."
+                        )
+                    },
                     {"role": "user", "content": prompt}
                 ]
             )
             content_raw = response.choices[0].message.content
-            
-            if not content_raw: 
+
+            if not content_raw:
                 logger.warning("Sarvam returned empty response.")
                 return None
-            
-            # Robust JSON Extraction (Rule #22 Hardening)
+
             return self._robust_json_parse(content_raw)
-            
+
         except Exception as e:
             logger.error(f"Sarvam AI failed: {e}", exc_info=True)
             return None
 
     def _robust_json_parse(self, raw_text):
-        """Extracts and repairs JSON from LLM output, handling truncation and noise."""
-        if not raw_text: return None
-        
+        """Extracts and repairs JSON from LLM output."""
+        if not raw_text:
+            return None
+
         cleaned = raw_text.strip()
-        
-        # 1. Strip Markdown
+
+        # Strip markdown
         if "```" in cleaned:
             cleaned = re.sub(r"```json|```", "", cleaned).strip()
-            
-        # 2. Find first { and last }
+
         start = cleaned.find("{")
         if start == -1:
             logger.warning(f"No JSON start found in: {cleaned[:100]}...")
             return None
-            
-        # Try to find last }
+
         end = cleaned.rfind("}")
-        
-        # 3. Handle Truncation: If no closing brace, try to repair
         if end == -1 or end < start:
             logger.warning("Truncated JSON detected. Attempting repair...")
-            json_str = cleaned[start:]
-            # Basic repair: Add missing closing brace
-            json_str += "\n}"
+            json_str = cleaned[start:] + "\n}"
         else:
-            json_str = cleaned[start:end+1]
-            
-        # 4. Clean trailing commas (common in AI output)
+            json_str = cleaned[start:end + 1]
+
+        # Clean trailing commas
         json_str = re.sub(r",\s*([\]\}])", r"\1", json_str)
-        
+
         try:
             return json.loads(json_str)
         except json.JSONDecodeError:
-            # 5. Last Resort: Regex Extraction for critical fields
-            logger.error("JSON Parse failed after repair. Attempting Regex extraction...")
+            logger.error("JSON Parse failed after repair. Attempting regex extraction...")
             return self._regex_extract(json_str)
 
     def _extract_amount(self, text):
-        """Helper to find Crore/Billion values for AI hint."""
-        if not text: return None
-        matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:Cr|Crore|Billion|Million|Rs|INR)', text, re.IGNORECASE)
-        return ", ".join(matches) if matches else None
+        """Finds Crore/Billion values in filing text."""
+        if not text:
+            return None
+        matches = re.findall(
+            r'([\d,]+(?:\.\d+)?)\s*(?:Cr|Crore|Billion|Million|Rs\.?|INR|Lakh)',
+            text, re.IGNORECASE
+        )
+        return ", ".join(matches[:5]) if matches else None
 
     def _regex_extract(self, text):
-        """Last-ditch effort to get fields if JSON is totally broken."""
+        """Last-ditch regex extraction when JSON is broken."""
         try:
             valid = "true" in text.lower()
             symbol_match = re.search(r'"symbol":\s*"([^"]+)"', text)
             score_match = re.search(r'"impact_score":\s*(\d+)', text)
             trigger_match = re.search(r'"trigger":\s*"([^"]+)"', text)
-            
+            sentiment_match = re.search(r'"sentiment":\s*"([^"]+)"', text)
+
             if symbol_match and score_match:
                 return {
                     "valid_event": valid,
                     "symbol": symbol_match.group(1),
                     "impact_score": int(score_match.group(1)),
-                    "trigger": trigger_match.group(1) if trigger_match else "Analysis Success (Regex Extracted)",
-                    "sentiment": "Neutral",
-                    "summary": "Full analysis failed, but critical parameters recovered."
+                    "trigger": trigger_match.group(1) if trigger_match else "Analysis Partial",
+                    "sentiment": sentiment_match.group(1) if sentiment_match else "Neutral",
+                    "is_big_ticket": False,
+                    "is_sme": False,
+                    "time_critical": False,
+                    "global_linkage": False,
+                    "sector": "Unknown",
+                    "expected_move": "Intraday",
+                    "key_insight": "Partial extraction due to JSON error.",
+                    "summary": "Full analysis failed. Critical parameters recovered."
                 }
-        except: pass
+        except Exception:
+            pass
         return None
 
     def summarize_morning_batch(self, analyzed_items):
-        """
-        Creates a high-level executive summary of all off-market news (weekend/overnight).
-        Used specifically for the 08:30 AM Morning Intel Report.
-        """
+        """Creates an executive summary of all off-market news for the 08:30 AM Morning Report."""
         if not self.sarvam_client or not analyzed_items:
-            return None
+            return {}
 
-        # Build list of news with their scores
         news_list_str = ""
         for i, item in enumerate(analyzed_items):
-            # item is a tuple or dict depending on DB query
-            if isinstance(item, tuple):
-                headline, summary, source, url, impact = item
+            if isinstance(item, dict):
+                headline = item.get("headline", "N/A")
+                source = item.get("source", "N/A")
+                url = item.get("url", "#")
+                impact = item.get("impact_score", 0)
             else:
-                headline = item.get("headline")
-                summary = item.get("summary")
-                source = item.get("source")
-                url = item.get("url")
-                impact = item.get("impact_score")
+                # Legacy tuple support
+                headline, _, source, url, impact = item[0], item[1], item[2], item[3], item[4]
 
-            news_list_str += f"{i+1}. [{source}] {headline} (Impact: {impact}/10) | Source: {url}\n"
+            news_list_str += f"{i + 1}. [{source}] {headline} (Impact: {impact}/10) | {url}\n"
 
         prompt = f"""
-You are the Chief Intelligence Officer for a top-tier Indian Hedge Fund.
-Task: Synthesize the following off-market news events into a single "EXECUTIVE MARKET PREVIEW" for the 09:15 open.
+You are the Chief Intelligence Officer of a top-tier Indian Hedge Fund.
+Synthesize these off-market NSE news events into a "MORNING MARKET INTELLIGENCE BRIEF" for the 09:15 open.
 
-OFF-MARKET NEWS BACKLOG:
+OFF-MARKET EVENTS:
 {news_list_str}
 
 REQUIREMENTS:
-1. **CRITICAL NARRATIVE**: Identify the single most important theme (e.g., "Macro weakness led by US Fed", "Positive Corporate Earnings week").
-2. **SECTOR FOCUS**: Mention which sectors (Banking, IT, Auto, etc.) are likely to see the most action.
-3. **TONE**: Professional, urgent, and concise.
-4. **FORMAT**: Markdown for Telegram. Use Bold for impact.
+1. CRITICAL NARRATIVE: The single most important macro/micro theme.
+2. SECTOR FOCUS: Which sectors (Banking, IT, Pharma, Defence, Auto) are likely most active.
+3. SENTIMENT: Overall bias for the opening bell.
+4. TONE: Professional, succinct, institutional. No fluff.
 
-RESPONSE FORMAT (JSON):
+RESPONSE (STRICT JSON ONLY):
 {{
-  "theme": "Top Theme Headline",
-  "summary": "3-4 sentences of deep synthesis.",
-  "sectors_to_watch": "Sector 1, Sector 2",
-  "sentiment": "Positive | Negative | Cautious"
+  "theme": "Top Theme Headline (5-8 words)",
+  "summary": "3-4 sentences of high-density synthesis.",
+  "sectors_to_watch": "Sector1, Sector2, Sector3",
+  "sentiment": "Positive | Negative | Cautious | Neutral"
 }}
 """
-        return self._run_prompt(prompt)
+        return self._run_prompt(prompt) or {}
 
-    # Backward compatibility / Batch wrapper (treats single item as event)
-    def analyze_news_batch(self, news_items, recent_news=None):
+    # ── Backward-compatibility wrappers ──────────────────────────────────────
+    def analyze_news_batch(self, news_items, market_status="CLOSED"):
         results = []
         for item in news_items:
-             res = self.analyze_single_event([item], recent_news)
-             if res and res.get("valid_event", False):
-                 res["indices"] = [0] 
-                 results.append(res)
+            res = self.analyze_single_event([item], market_status=market_status, source_name=item.get("source", "NSE"))
+            if res and res.get("valid_event", False):
+                res["indices"] = [0]
+                results.append(res)
         return results
 
-    def analyze_news(self, company, text, source_type="corporate", skip_ai=False, recent_news=None):
+    def analyze_news(self, company, text, source_type="corporate", market_status="CLOSED"):
         item = {"source": source_type, "headline": company, "summary": text}
-        result = self.analyze_single_event([item], recent_news=recent_news)
+        result = self.analyze_single_event([item], market_status=market_status, source_name=source_type)
         if result and result.get("valid_event", False):
-             return result
+            return result
         return self._fallback(company, "Rejection/Invalid Event")
 
     def _fallback(self, company, error=""):
         return {
             "symbol": company,
             "headline": "Analysis Offline",
-            "summary": f"Could not analyze.",
+            "summary": "Could not analyze.",
             "sentiment": "Neutral",
             "impact_score": 0,
-            "valid_event": False
+            "valid_event": False,
+            "is_sme": False,
+            "is_big_ticket": False,
+            "time_critical": False,
+            "global_linkage": False
         }

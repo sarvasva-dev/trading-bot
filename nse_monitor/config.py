@@ -25,7 +25,7 @@ _chat_ids = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [cid.strip() for cid in _chat_ids.split(",") if cid.strip()]
 
 # AI Config
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "sk_m2lt55jk_LvxJ8hWcocMtUyDkDigLCLXs").strip()
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
 
 # Email Config (Notifier)
 _alert_emails = os.getenv("ALERT_EMAILS", "")
@@ -85,10 +85,10 @@ def _get_plan(key, default, label):
         return {"amount": int(p), "days": int(d), "label": label}
 
 SUBSCRIPTION_PLANS = {
-    "99": _get_plan("PLAN_99", "99:2", "Starter"),
-    "499": _get_plan("PLAN_499", "499:7", "Growth"),
-    "999": _get_plan("PLAN_999", "999:28", "Pro"),
-    "7999": _get_plan("PLAN_7999", "7999:336", "Institutional")
+    "99": _get_plan("PLAN_99", "99:2", "Market Trial"),
+    "499": _get_plan("PLAN_499", "499:7", "Growth Value"),
+    "999": _get_plan("PLAN_999", "999:28", "Institutional Pro"),
+    "7999": _get_plan("PLAN_7999", "7999:336", "Annual Industry Partner")
 }
 
 # --- SCHEDULER CONTROLS ---

@@ -24,9 +24,23 @@ class TelegramBot:
         self.last_update_id = 0 # Track Telegram offsets
         self._load_dynamic_ids()
         self._sync_with_db()
+        self._sync_telegram_offset() # v2.0: Prevent startup "vomit"
         self.set_my_commands()
 
-    def set_my_commands(self):
+    def _sync_telegram_offset(self):
+        """Rule #24: Fetches the latest update_id from Telegram on boot to skip stale messages."""
+        if not self.token: return
+        try:
+            url = f"{self.base_url}/getUpdates"
+            # Get only the last message
+            r = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5)
+            data = r.json()
+            if data.get("ok") and data.get("result"):
+                self.last_update_id = data["result"][0]["update_id"]
+                logger.info(f"Telegram Bot: Boot sync complete. Offset set to {self.last_update_id}.")
+        except Exception as e:
+            logger.warning(f"Telegram Bot: Failed to sync offset on boot: {e}")
+
         """Sets the blue menu buttons in the Telegram UI (Rule #24)."""
         if not self.token: return
         commands = [
@@ -86,6 +100,7 @@ class TelegramBot:
             {"command": "subscribe", "description": "Get Premium Access (Razorpay Link)"},
             {"command": "me", "description": "My ID & Credits Balance"},
             {"command": "history", "description": "View My Payment History"},
+            {"command": "hisab", "description": "📝 View Billing Logs (Hisab)"},
             {"command": "support", "description": "Contact Human Support"}
         ]
         try:
@@ -110,23 +125,32 @@ class TelegramBot:
                         chat_id = str(update["message"]["chat"]["id"])
                         text = update["message"].get("text", "").strip()
                         first_name = update["message"]["from"].get("first_name", "User")
-                        
-                        # 1. Registration Logic
+                            # 1. Registration & Campaign Tracking (v1.3.1)
                         if chat_id not in self.chat_ids:
                             username = update["message"]["from"].get("username", "Unknown")
-                            is_new = self.db.save_user(chat_id, first_name, username) if self.db else False
+                            
+                            # Parse Campaign Tag: /start <camp_tag>
+                            source_tag = "direct"
+                            if text.startswith("/start "):
+                                parts = text.split()
+                                if len(parts) >= 2:
+                                    source_tag = parts[1]
+                                    logger.info(f"Campaign Detected: User {chat_id} from {source_tag}")
+
+                            is_new = self.db.save_user(chat_id, first_name, username, source=source_tag) if self.db else False
                             self.chat_ids.append(chat_id)
                             
                             if is_new:
-                                self._send_raw(chat_id, "🎁 <b>Welcome Offer Activated!</b>\nYou've been credited with <b>2 Free Market Days</b> as a first-time user. Signals start now!")
-                                logger.info(f"New User Registered + Trial: {first_name} (@{username}) | ID: {chat_id}")
+                                logger.info(f"New Institutional User Registered: {first_name} | Tag: {source_tag}")
+                                self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
+                                                      "Welcome to the Market Pulse Institutional Engine. "
+                                                      "As a new user, you've been granted <b>2 Free Market-Days</b> of high-impact analysis.")
                             else:
-                                username = update["message"]["from"].get("username", "Unknown")
                                 self.db.sync_user(chat_id, first_name, username)
-                                logger.info(f"Existing User Re-synced: {first_name} (@{username}) | ID: {chat_id}")
+                                logger.info(f"Existing User Re-synced: {chat_id}")
 
                         # 2. Command Router
-                        if text == "/start":
+                        if text.startswith("/start"):
                             self._send_welcome(chat_id, first_name)
                         elif text == "/plan" or text == "/me":
                             self._handle_plan(chat_id, first_name)
@@ -134,22 +158,27 @@ class TelegramBot:
                             self._handle_subscribe_menu(chat_id)
                         elif text == "/history":
                             self._handle_history(chat_id)
+                        elif text == "/hisab" or text == "/billing":
+                            self._handle_billing_history(chat_id)
                         elif text.startswith("/sub_"):
                             self._handle_plan_selection(chat_id, text, first_name)
                         elif text == "/support":
-                            self._send_raw(chat_id, "🛠️ <b>Contact Support</b>\nClick the button below to message the owner on WhatsApp.", 
+                            self._send_raw(chat_id, "🛠️ <b>Contact Support</b>\nClick the button below to message the owner on WhatsApp.",
                                           {"inline_keyboard": [[{"text": "📲 Message on WhatsApp", "url": "https://wa.me/917985040858"}]]})
                         elif text == "/verify":
                             self._handle_manual_verify(chat_id)
                         elif text.startswith("/check_payment") or text.startswith("/verify_"):
-                            # Handle both auto-links and manual verify
-                            parts = text.split("_")
-                            link_id = parts[1] if len(parts) > 1 else None
+                            # v2.0: Robust ID extraction using regex
+                            import re
+                            match = re.search(r'(pl_[a-zA-Z0-9]+)', text)
+                            link_id = match.group(1) if match else None
                             self._handle_check_payment(chat_id, link_id)
                         elif text == "/bulk":
                             self._handle_bulk_deals(chat_id)
                         elif text == "/upcoming":
                             self._handle_upcoming(chat_id)
+                        elif text == "/status":
+                            self._handle_status(chat_id)
                         elif text == "/admin":
                             self._send_raw(chat_id, "🔐 <b>Admin Dashboard (Interactive)</b>\nPlease use the dedicated Admin Bot for button-based controls.")
                         
@@ -177,6 +206,8 @@ class TelegramBot:
                         
                         if data == "sub_menu":
                             self._handle_subscribe_menu(chat_id)
+                        elif data == "view_billing":
+                            self._handle_billing_history(chat_id)
                         
                         # Answer callback
                         requests.post(f"{self.base_url}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
@@ -185,43 +216,46 @@ class TelegramBot:
             logger.error(f"Failed to handle Telegram updates: {e}")
 
     def _handle_plan(self, chat_id, first_name):
-        """Rich user plan and expiry tracking (v9.0)."""
+        """v1.0: Precise expiry using TradingCalendar instead of guesswork."""
         user = self.db.get_user(chat_id)
         if not user:
-             self._send_welcome(chat_id, first_name)
-             return
+            self._send_welcome(chat_id, first_name)
+            return
 
         uid, name, uname, active, days = user
-        
-        # Calculate Estimated Expiry (Simple offset for weekends)
-        from datetime import datetime, timedelta
-        tz = pytz.timezone("Asia/Kolkata")
-        now = datetime.now(tz)
-        
-        # Estimate: Add ~40% for weekends if long duration
-        offset_days = days + (days // 5) * 2
-        expiry_dt = now + timedelta(days=offset_days)
-        expiry_str = expiry_dt.strftime("%d %b %Y")
-        
-        status_icon = "💎" if active else "🆓"
-        status_text = "PREMIUM ACTIVE" if active else "FREE/EXPIRED"
-        
+
+        # v1.0: Accurate expiry — calendar walk
+        try:
+            from nse_monitor.trading_calendar import TradingCalendar
+            expiry_dt = TradingCalendar.get_expiry_date(days)
+            expiry_str = expiry_dt.strftime("%d %b %Y")
+        except Exception:
+            import pytz
+            from datetime import timedelta
+            tz = pytz.timezone("Asia/Kolkata")
+            expiry_dt = datetime.now(tz) + timedelta(days=days + (days // 5) * 2)
+            expiry_str = expiry_dt.strftime("%d %b %Y") + " (est.)"
+
+        status_icon = "💎" if active else "🔘"
+        status_text = "PREMIUM ACTIVE" if active else "TRIAL / EXPIRED"
+
         msg = (
-            f"{status_icon} <b>YOUR MARKET PULSE PLAN</b>\n"
+            f"{status_icon} <b>INSTITUTIONAL ACCOUNT OVERVIEW</b>\n"
             f"────────────────────────\n"
-            f"👤 <b>User:</b> {name}\n"
-            f"🆔 <b>ID:</b> <code>{chat_id}</code>\n\n"
-            f"⏳ <b>Credits:</b> <code>{days} Market Days</code>\n"
-            f"📅 <b>Est. Expiry:</b> <code>{expiry_str}</code>\n"
-            f"📡 <b>Status:</b> <b>{status_text}</b>\n"
+            f"👤 <b>Client:</b> {name}\n"
+            f"🆔 <b>Account ID:</b> <code>{chat_id}</code>\n\n"
+            f"⏳ <b>Balance:</b> <code>{days} Market Days</code>\n"
+            f"📅 <b>Expiry:</b> <code>{expiry_str}</code>\n"
+            f"📡 <b>Service:</b> <b>{status_text}</b>\n"
             f"────────────────────────\n"
-            f"<i>(Note: Credits only debit on trading days)</i>"
+            f"💡 <i>Credits only deduct on NSE Trading Days. Public holidays and weekends are ALWAYS free.</i>"
         )
-        
+
         keyboard = {
             "inline_keyboard": [
-                [{"text": "💎 Renew / Upgrade Plan", "callback_data": "sub_menu"}],
-                [{"text": "🛠️ Contact Admin (WhatsApp)", "url": "https://wa.me/917985040858"}]
+                [{"text": "💎 Extend / Upgrade Subscription", "callback_data": "sub_menu"}],
+                [{"text": "📊 Detailed Billing Audit (Hisab)", "callback_data": "view_billing"}],
+                [{"text": "🛠️ Institutional Support", "url": "https://wa.me/917985040858"}]
             ]
         }
         self._send_raw(chat_id, msg, keyboard)
@@ -231,15 +265,15 @@ class TelegramBot:
         user = self.db.get_user(chat_id)
         
         intro = (
-            f"🚀 <b>{BOT_NAME} Institutional Engine</b>\n\n"
-            f"Hello {first_name}! I am your high-precision NSE intelligence system.\n"
-            f"I scan corporate filings in real-time to find high-impact institutional signals.\n"
+            f"🏛️ <b>{BOT_NAME} Institutional Engine</b>\n\n"
+            f"Welcome, {first_name}. You are connected to a high-precision NSE intelligence system. "
+            f"Our engine scans institutional filings in real-time to identify high-impact market signals.\n"
         )
         
         disclaimer = (
-            f"\n⚖️ <b>SEBI DISCLAIMER:</b>\n"
-            f"<i>Non-SEBI Educational Resource. Content is for informational purposes only. "
-            f"Trading involves risk. Certified professionals only.</i>\n"
+            f"\n⚖️ <b>Regulatory Disclosure:</b>\n"
+            f"<i>Non-SEBI Research Tool. Content is for educational and informational purposes only. "
+            f"Trading involves substantial risk. Consultation with certified professionals is advised.</i>\n"
         )
         
         if user and user[4] > 0: # If has active credits, show Dashboard
@@ -287,12 +321,12 @@ class TelegramBot:
             self._send_raw(chat_id, welcome_text)
 
     def _get_plan_menu(self):
-        """Helper to return the structured plan menu text (Dynamic v8.2)."""
+        """Helper to return the structured plan menu text (v1.3.1)."""
         from nse_monitor.config import SUBSCRIPTION_PLANS
         
         msg = (
-            "💎 <b>PREMIUM PLANS (MARKET DAYS)</b>\n"
-            "<i>(Subscription only debits on trading days)</i>\n"
+            "💎 <b>INSTITUTIONAL ACCESS PLANS</b>\n"
+            "<i>Market-Day Billing (Zero loss on holidays)</i>\n"
             "────────────────────────\n"
         )
         
@@ -595,6 +629,8 @@ class TelegramBot:
             logger.error(f"Threaded link generation failed: {e}", exc_info=True)
             self._send_raw(chat_id, "⚠️ <b>System Error.</b>\nOur payment partner is unreachable. Please contact support.")
 
+    # v1.1: First send_signal removed. Keeping the polished v15.0 version below.
+
     def _handle_manual_verify(self, chat_id):
         """Triggered by the /verify command (Rule #24)."""
         pending = self.db.get_pending_payment_links()
@@ -647,10 +683,41 @@ class TelegramBot:
         if reply_markup:
             payload["reply_markup"] = reply_markup
             
-        try:
-            requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
-        except Exception as e:
-            logger.error(f"Raw send failed: {e}")
+        return self._execute_request("sendMessage", payload)
+
+    def send_admin_alert(self, text):
+        """v1.3: Sends a critical system alert to the Administrator chat ID."""
+        admin_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+        if not admin_id: return
+        
+        payload = {
+            "chat_id": admin_id,
+            "text": f"🛠️ <b>{BOT_NAME} — SYSTEM ALERT</b>\n────────────────────────\n{text}",
+            "parse_mode": "HTML"
+        }
+        return self._execute_request("sendMessage", payload)
+
+    def _execute_request(self, method, payload, retries=3):
+        """Internal helper with 429 Rate-Limit resilience (v1.3)."""
+        url = f"{self.base_url}/{method}"
+        for attempt in range(retries):
+            try:
+                r = requests.post(url, json=payload, timeout=15)
+                if r.status_code == 429:
+                    # RULE #24: Exponential Backoff for Rate Limits
+                    retry_after = r.json().get("parameters", {}).get("retry_after", 5)
+                    logger.warning(f"⚠️ Telegram Rate Limit (429). Backing off for {retry_after}s...")
+                    time.sleep(retry_after + 1)
+                    continue
+                
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                if attempt == retries - 1:
+                    logger.error(f"Telegram Request Failed ({method}): {e}")
+                    return None
+                time.sleep(1 * (attempt + 1))
+        return None
 
     def send_report(self, report_text):
         """Sends a structured pre-market report to active users."""
@@ -733,7 +800,7 @@ class TelegramBot:
             self._send_raw(chat_id, msg)
             return
 
-        msg = "📜 <b>YOUR PAYMENT HISTORY</b>\n────────────────────────\n"
+        msg = "📜 <b>TRANSACTION HISTORY</b>\n────────────────────────\n"
         for link_id, days, date_str in history[:10]: # Last 10
             # Simplify date
             try:
@@ -745,5 +812,123 @@ class TelegramBot:
             msg += f"   📅 {date_ts}\n\n"
         
         msg += "────────────────────────\n"
-        msg += "📈 <i>Thank you for supporting Market Pulse.</i>"
+        msg += "📈 <i>Thank you for choosing Market Pulse Professional.</i>"
         self._send_raw(chat_id, msg)
+
+    def _handle_billing_history(self, chat_id):
+        """Displays the 'Hisab' audit trail for the user (v2.0)."""
+        logs = self.db.get_billing_logs(chat_id, limit=8)
+        
+        if not logs:
+            msg = (
+                "📝 <b>BILLING AUDIT LOGS</b>\n"
+                "────────────────────────\n"
+                "<i>No billing activity found in the current audit period.</i>\n\n"
+                "💡 Credits are only deducted on active NSE trading days."
+            )
+            self._send_raw(chat_id, msg)
+            return
+
+        msg = "📝 <b>BILLING AUDIT LOGS</b>\n────────────────────────\n"
+        for evt, amt, reason, bal, date_str in logs:
+            icon = "➖" if evt == "DEBIT" else "➕"
+            # Simplify date
+            try:
+                date_ts = datetime.fromisoformat(date_str).strftime("%d %b, %H:%M")
+            except:
+                date_ts = date_str
+            
+            msg += f"{icon} <b>{amt} Market Day(s)</b> | {reason}\n"
+            msg += f"   📅 {date_ts} | Bal: {bal}\n\n"
+            
+        msg += "────────────────────────\n"
+        msg += "⚖️ <i>Internal Ledger transparency verified.</i>"
+        self._send_raw(chat_id, msg)
+
+    def _handle_status(self, chat_id):
+        """v1.0: Live System Diagnostic — tests AI, NSE, DB, and RAM in real-time."""
+        self._send_raw(chat_id, "🔍 <b>Running system diagnostics...</b>")
+
+        lines = []
+        lines.append("📊 <b>MARKET PULSE — SYSTEM STATUS</b>")
+        lines.append("────────────────────────")
+
+        # 1. NSE Connectivity
+        try:
+            import requests as _req
+            r = _req.get("https://www.nseindia.com", timeout=5)
+            nse_ok = r.status_code == 200
+        except Exception:
+            nse_ok = False
+        lines.append(f"📡 <b>NSE Server:</b> {'✅ Online' if nse_ok else '❌ Unreachable'}")
+
+        # 2. Sarvam AI
+        try:
+            from nse_monitor.config import SARVAM_API_KEY
+            ai_ok = bool(SARVAM_API_KEY and "placeholder" not in SARVAM_API_KEY)
+        except Exception:
+            ai_ok = False
+        lines.append(f"🧠 <b>AI Engine (Sarvam):</b> {'✅ Key Loaded' if ai_ok else '❌ Key Missing'}")
+
+        # 3. Database health
+        try:
+            cursor = self.db.conn.execute("PRAGMA integrity_check")
+            db_status = cursor.fetchone()[0]
+            db_ok = db_status == "ok"
+            # Queue count
+            q_cursor = self.db.conn.execute(
+                "SELECT COUNT(*) FROM news_items WHERE processing_status = 0"
+            )
+            pending_count = q_cursor.fetchone()[0]
+        except Exception:
+            db_ok = False
+            pending_count = "?"
+        lines.append(f"🗄️ <b>Database:</b> {'✅ Healthy' if db_ok else '❌ Corrupted'}")
+        lines.append(f"📥 <b>Queue Pending:</b> <code>{pending_count}</code> items")
+
+        # 4. User stats
+        try:
+            total, active = self.db.get_user_stats()
+        except Exception:
+            total, active = "?", "?"
+        lines.append(f"👥 <b>Users:</b> {total} total | <b>{active}</b> active")
+
+        # 5. RAM usage
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            ram_used = mem.used / (1024 ** 2)
+            ram_total = mem.total / (1024 ** 2)
+            ram_pct = mem.percent
+            lines.append(
+                f"💾 <b>RAM:</b> <code>{ram_used:.0f}MB / {ram_total:.0f}MB ({ram_pct}%)</code>"
+            )
+        except ImportError:
+            lines.append("💾 <b>RAM:</b> <i>psutil not installed</i>")
+        except Exception:
+            lines.append("💾 <b>RAM:</b> <i>Unavailable</i>")
+
+        # 6. Trading day info
+        try:
+            from nse_monitor.trading_calendar import TradingCalendar
+            import pytz
+            tz = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(tz)
+            is_trading = TradingCalendar.is_trading_day(now_ist)
+            holiday_name = TradingCalendar.get_holiday_name(now_ist)
+            if is_trading:
+                cal_status = "✅ Trading Day"
+            elif holiday_name:
+                cal_status = f"🏖️ NSE Holiday ({holiday_name})"
+            elif now_ist.weekday() >= 5:
+                cal_status = "😴 Weekend"
+            else:
+                cal_status = "❌ Non-Trading"
+            lines.append(f"📅 <b>Today:</b> {cal_status}")
+        except Exception:
+            pass
+
+        lines.append("────────────────────────")
+        lines.append("<i>v1.0 Industrial Engine | Non-SEBI</i>")
+
+        self._send_raw(chat_id, "\n".join(lines))

@@ -11,3 +11,8 @@ scikit-learn
 numpy
 pytest
 razorpay
+psutil
+pytesseract
+opencv-python
+Pillow
+sentence-transformers

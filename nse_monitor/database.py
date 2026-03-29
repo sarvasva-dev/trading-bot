@@ -1,6 +1,8 @@
 import sqlite3
 import os
 import logging
+import threading
+from datetime import datetime
 from nse_monitor.config import DB_PATH
 
 logger = logging.getLogger(__name__)
@@ -8,14 +10,46 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        self._create_table()
+        try:
+            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            self.lock = threading.Lock()
+            # v1.3.2: Increased busy timeout for high-concurrency scalability
+            self.conn.execute("PRAGMA busy_timeout = 30000")
+            # Test connection immediately
+            self.conn.execute("SELECT 1")
+            self._create_table()
+            self._migrate_schema()
+        except sqlite3.DatabaseError as e:
+            if "malformed" in str(e).lower():
+                logger.error(f"❌ DATABASE CORRUPTED: {e}. Initiating auto-rescue...")
+                self._handle_malformed()
+            else:
+                raise e
+
+    def _handle_malformed(self):
+        """v2.0: Rescues the system from a 'malformed' error by backing up and resetting."""
+        import shutil
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{DB_PATH}.malformed_{timestamp}.bak"
+        try:
+            if hasattr(self, 'conn') and self.conn:
+                self.conn.close()
+            shutil.move(DB_PATH, backup_path)
+            logger.warning(f"⚠️ Corrupted DB moved to {backup_path}")
+            # Re-init
+            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            self.lock = threading.Lock()
+            self._create_table()
+            self._migrate_schema()
+            logger.info("✅ Database reset successfully. Re-ingest starting...")
+        except Exception as ex:
+            logger.critical(f"🔥 FATAL: Database recovery failed: {ex}")
 
     def _create_table(self):
         with self.conn:
-            # High Performance Pragmas
+            # v1.3.2: Industrial Concurrency (WAL mode + FULL sync)
             self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA synchronous=FULL")
             
             # Legacy table for NSE Announcements
             self.conn.execute("""
@@ -28,23 +62,26 @@ class Database:
                 )
             """)
 
-            # Unified table for all news sources (Updated for v7.0)
+            # Unified table for all news sources (v1.0 — Zero-Loss Queue)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS news_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source TEXT,
+                    symbol TEXT,
                     headline TEXT,
                     summary TEXT,
                     url TEXT UNIQUE,
                     timestamp TEXT,
                     embedding BLOB,
                     cluster_id INTEGER,
-                    perspective TEXT, 
-                    impact_score INTEGER, 
+                    perspective TEXT,
+                    impact_score INTEGER,
                     sentiment TEXT,
+                    trigger TEXT,
                     intraday_probability INTEGER DEFAULT 0,
                     trade_quality TEXT,
                     content_hash TEXT UNIQUE,
+                    processing_status INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -75,27 +112,24 @@ class Database:
                     id TEXT PRIMARY KEY,
                     first_name TEXT,
                     username TEXT,
-                    is_active INTEGER DEFAULT 1,
-                    premium_until TIMESTAMP,
+                    is_active INTEGER DEFAULT 0,
                     working_days_left INTEGER DEFAULT 0,
-                    is_trial_used INTEGER DEFAULT 0,
                     registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
-            # Migration check: Ensure new columns exist in legacy databases
-            try:
-                self.conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
-            except: pass 
-            try:
-                self.conn.execute("ALTER TABLE users ADD COLUMN premium_until TIMESTAMP")
-            except: pass
-            try:
-                self.conn.execute("ALTER TABLE users ADD COLUMN working_days_left INTEGER DEFAULT 0")
-            except: pass
-            try:
-                self.conn.execute("ALTER TABLE users ADD COLUMN is_trial_used INTEGER DEFAULT 0")
-            except: pass
+
+            # Billing Audit Trail (v2.0 — Transparency)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_billing_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT,
+                    event_type TEXT, -- 'DEBIT' | 'CREDIT' | 'RESET'
+                    amount INTEGER,
+                    reason TEXT,     -- 'Trading Day Deduction' | 'Manual Grant' | 'Payment'
+                    balance_after INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
             # Payment Links table (Rule #24 - Auto-Activation)
             self.conn.execute("""
@@ -108,9 +142,64 @@ class Database:
                 )
             """)
             
-            # v7.0 Performance Indexes
+            # System Config table (v2.0 — Live Admin Controls)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS system_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Initial Config Seeds
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '5')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('media_mute', '0')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_backup', '0')")
+            
+
+            # v1.0 Performance Indexes
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news_items(timestamp)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_cluster_id ON news_items(cluster_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_processing_status ON news_items(processing_status)")
+            
+            # v1.3.2: Scalability Indexes for high user counts
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_cid ON user_billing_log(chat_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_reg ON users(registered_at)")
+
+    def _migrate_schema(self):
+        """v2.0: Centralized migration logic to ensure schema consistency across versions."""
+        cursor = self.conn.cursor()
+        
+        # Table: news_items
+        cursor.execute("PRAGMA table_info(news_items)")
+        news_cols = [row[1] for row in cursor.fetchall()]
+        
+        for col, col_type in [("trigger", "TEXT"), ("symbol", "TEXT"), ("processing_status", "INTEGER DEFAULT 0")]:
+            if col not in news_cols:
+                try:
+                    with self.conn:
+                        self.conn.execute(f"ALTER TABLE news_items ADD COLUMN {col} {col_type}")
+                        logger.info(f"Migration: Added {col} to news_items.")
+                except Exception as e:
+                    logger.error(f"Migration failed ({col}): {e}")
+
+        # Table: users
+        cursor.execute("PRAGMA table_info(users)")
+        user_cols = [row[1] for row in cursor.fetchall()]
+        
+        # v1.3.1: Professional Marketing Columns
+        for col, col_type in [
+            ("working_days_left", "INTEGER DEFAULT 0"),
+            ("is_trial_used", "INTEGER DEFAULT 0"),
+            ("source_tag", "TEXT DEFAULT 'direct'")
+        ]:
+            if col not in user_cols:
+                try:
+                    with self.conn:
+                        self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+                        logger.info(f"Migration: Added {col} to users table.")
+                except Exception as e:
+                    logger.error(f"Migration failed (users.{col}): {e}")
 
     def get_alert_count_last_hour(self):
         """Returns the number of alerts sent in the last 60 minutes."""
@@ -165,40 +254,80 @@ class Database:
         return False
 
     def news_exists(self, url, content_hash):
-        """Checks if a news item already exists based on URL or Content Hash."""
+        """v2.0: Returns (id, source) if news exists, else (None, None). Supports upranking."""
         cursor = self.conn.cursor()
         
         # Check by URL first (most reliable for exact duplicates)
         if url:
-            cursor.execute("SELECT id FROM news_items WHERE url = ?", (url,))
-            if cursor.fetchone():
-                return True
+            cursor.execute("SELECT id, source FROM news_items WHERE url = ?", (url,))
+            res = cursor.fetchone()
+            if res: return res
                 
         # Fallback to content hash check
         if content_hash:
-            cursor.execute("SELECT id FROM news_items WHERE content_hash = ?", (content_hash,))
-            if cursor.fetchone():
-                return True
+            cursor.execute("SELECT id, source FROM news_items WHERE content_hash = ?", (content_hash,))
+            res = cursor.fetchone()
+            if res: return res
                 
-        return False
+        return None, None
 
-    # Updated Methods for Event-Driven Intelligence (v7.0)
+    def update_news_source(self, news_id, new_source):
+        """v2.0: Upranks news source (e.g., from Media to NSE)."""
+        with self.conn:
+            self.conn.execute("UPDATE news_items SET source = ? WHERE id = ?", (new_source, news_id))
+
+    # v1.0 Zero-Loss Queue Methods
     def add_news_item(self, item):
-        """Initial ingestion of news item. Returns the new row ID.
-           Accepts a dictionary 'item' as input.
-        """
+        """Initial ingestion of a news item into the queue (status=0: Pending)."""
         try:
-            with self.conn:
-                cursor = self.conn.execute(
-                    """INSERT OR IGNORE INTO news_items 
-                       (source, headline, summary, url, timestamp, content_hash) 
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (item.get("source"), item.get("headline"), item.get("summary"), 
-                     item.get("url"), item.get("timestamp"), item.get("content_hash"))
-                )
-                return cursor.lastrowid
+            with self.lock:
+                with self.conn:
+                    cursor = self.conn.execute(
+                        """INSERT OR IGNORE INTO news_items 
+                           (source, symbol, headline, summary, url, timestamp, content_hash, processing_status) 
+                           VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                        (item.get("source"), item.get("symbol"), item.get("headline"),
+                         item.get("summary"), item.get("url"), item.get("timestamp"),
+                         item.get("content_hash"))
+                    )
+                    return cursor.lastrowid if cursor.lastrowid else None
         except sqlite3.IntegrityError:
             return None
+
+    def get_pending_news(self, limit=4):
+        """v1.0: Fetches oldest unprocessed news items from the queue.
+           processing_status=0 means Pending. Limit=4 ensures we do 4 per cycle max.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT id, source, symbol, headline, summary, url, timestamp
+               FROM news_items
+               WHERE processing_status = 0
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (limit,)
+        )
+        rows = cursor.fetchall()
+        return [
+            {"db_id": r[0], "source": r[1], "symbol": r[2], "headline": r[3],
+             "summary": r[4], "url": r[5], "timestamp": r[6]}
+            for r in rows
+        ]
+
+    def mark_analysis_complete(self, news_id, impact_score, sentiment, trigger=None, perspective=None, alerted=False):
+        """v1.0: Updates a news item as Analyzed (status=1) or Alerted (status=2)."""
+        status = 2 if alerted else 1
+        try:
+            with self.lock:
+                with self.conn:
+                    self.conn.execute(
+                        """UPDATE news_items
+                           SET processing_status = ?, impact_score = ?, sentiment = ?, trigger = ?, perspective = ?
+                           WHERE id = ?""",
+                        (status, impact_score, sentiment, trigger, perspective, news_id)
+                    )
+        except Exception as e:
+            logger.error(f"Error marking analysis complete for {news_id}: {e}")
 
     def update_news_analysis(self, news_id, embedding, cluster_id, perspective, impact_score, sentiment, probability=0, quality=None):
         """Updates news item with AI/ML analysis results."""
@@ -284,8 +413,8 @@ class Database:
                 (news_id,)
             )
 
-    def save_user(self, chat_id, first_name, username):
-        """Saves a user and credits a 2-day free trial for first-time registrations."""
+    def save_user(self, chat_id, first_name, username, source='direct'):
+        """Saves a user and credits a 2-day free trial for first-time registrations (v1.3.1)."""
         with self.conn:
             # Check if user already exists
             cursor = self.conn.cursor()
@@ -294,11 +423,11 @@ class Database:
             
             if not user:
                 # New user: Give 2 free market days
-                logger.info(f"🆕 NEW USER REGISTERED: {first_name} ({chat_id}) | Credited 2-day trial.")
+                logger.info(f"🆕 NEW USER REGISTERED: {first_name} ({chat_id}) | Source: {source} | Credited 2-day trial.")
                 self.conn.execute("""
-                    INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active)
-                    VALUES (?, ?, ?, 2, 1, 1)
-                """, (str(chat_id), first_name, username))
+                    INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active, source_tag)
+                    VALUES (?, ?, ?, 2, 1, 1, ?)
+                """, (str(chat_id), first_name, username, source))
                 return True # New registration
             return False
 
@@ -308,16 +437,22 @@ class Database:
         cursor.execute("SELECT COUNT(*) FROM users")
         return cursor.fetchone()[0]
 
-    def add_working_days(self, chat_id, days):
+    def add_working_days(self, chat_id, days, reason="Manual Grant / Payment"):
         """Credits a user with Market Days and activates them (UPSERT)."""
         with self.conn:
-            # First, ensure user exists (fallback registration)
+            # 1. Fetch old balance for audit
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT working_days_left FROM users WHERE id = ?", (str(chat_id),))
+            old_row = cursor.fetchone()
+            old_balance = old_row[0] if old_row else 0
+
+            # 2. Ensure user exists (fallback registration)
             self.conn.execute("""
                 INSERT OR IGNORE INTO users (id, first_name, username, is_active, working_days_left)
                 VALUES (?, 'Manual', 'manual_entry', 1, 0)
             """, (str(chat_id),))
             
-            # Then update days
+            # 3. Update days
             self.conn.execute("""
                 UPDATE users 
                 SET working_days_left = working_days_left + ?, 
@@ -325,13 +460,41 @@ class Database:
                 WHERE id = ?
             """, (days, str(chat_id)))
 
-    def decrement_working_days(self):
-        """Decrements 1 day from all active users (To be called on weekdays)."""
+            # 4. Log the "CREDIT" for Hisab audit (v1.3)
+            new_balance = old_balance + days
+            self.conn.execute("""
+                INSERT INTO user_billing_log (chat_id, event_type, amount, reason, balance_after)
+                VALUES (?, 'CREDIT', ?, ?, ?)
+            """, (str(chat_id), days, reason, new_balance))
+            
+            logger.info(f"Billing Hub: Credited {days} days to {chat_id} | New Bal: {new_balance}")
+
+    def decrement_working_days(self, reason="Trading Day Deduction"):
+        """Decrements 1 day from all active users and logs the event (v2.0)."""
         with self.conn:
-            # 1. Decrement days
-            self.conn.execute("UPDATE users SET working_days_left = working_days_left - 1 WHERE working_days_left > 0")
-            # 2. Deactivate users with 0 days left
+            # 1. Fetch users to log before decrementing
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, working_days_left FROM users WHERE working_days_left > 0 AND is_active = 1")
+            active_users = cursor.fetchall()
+
+            if not active_users:
+                return
+
+            # 2. Decrement days
+            self.conn.execute("UPDATE users SET working_days_left = working_days_left - 1 WHERE working_days_left > 0 AND is_active = 1")
+            
+            # 3. Deactivate users with 0 days left
             self.conn.execute("UPDATE users SET is_active = 0 WHERE working_days_left <= 0")
+
+            # 4. Log the "Hisab" (Accounting)
+            for uid, old_balance in active_users:
+                new_balance = old_balance - 1
+                self.conn.execute("""
+                    INSERT INTO user_billing_log (chat_id, event_type, amount, reason, balance_after)
+                    VALUES (?, 'DEBIT', 1, ?, ?)
+                """, (uid, reason, new_balance))
+                
+            logger.info(f"Billing Hub: Successfully processed 'Hisab' for {len(active_users)} users | Reason: {reason}")
 
     def toggle_user_status(self, chat_id, active=1):
         """Activates or deactivates a user's subscription."""
@@ -403,6 +566,67 @@ class Database:
         )
         return cursor.fetchall()
 
+    def get_billing_logs(self, chat_id, limit=5):
+        """v2.0: Fetches the 'Hisab' audit trail for a user."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT event_type, amount, reason, balance_after, created_at FROM user_billing_log WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
+            (str(chat_id), limit)
+        )
+        return cursor.fetchall()
+
+    def get_global_hisab(self, days=1):
+        """v2.0: Summary of all billing events for Admin audit."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT SUM(amount) FROM user_billing_log 
+            WHERE event_type='DEBIT' AND created_at > datetime('now', ?)
+        """, (f"-{days} days",))
+        total_debits = cursor.fetchone()[0] or 0
+        
+        cursor.execute("""
+            SELECT COUNT(DISTINCT chat_id) FROM user_billing_log 
+            WHERE event_type='DEBIT' AND created_at > datetime('now', ?)
+        """, (f"-{days} days",))
+        unique_users = cursor.fetchone()[0] or 0
+        
+        return total_debits, unique_users
+
+    def get_config(self, key, default=None):
+        """v2.0: Fetches live system config from DB."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM system_config WHERE key = ?", (key,))
+        res = cursor.fetchone()
+        return res[0] if res else default
+
+    def set_config(self, key, value):
+        """v2.0: Updates live system config."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, str(value))
+            )
+
+    def purge_old_data(self, days=30):
+        """v1.3: Deletes news items older than N days to save space on 1GB VPS."""
+        with self.conn:
+            cursor = self.conn.execute(
+                "DELETE FROM news_items WHERE created_at < datetime('now', ?)",
+                (f"-{days} days",)
+            )
+            deleted_news = cursor.rowcount
+            
+            # Also purge old logs to keep it lean
+            cursor = self.conn.execute(
+                "DELETE FROM user_billing_log WHERE created_at < datetime('now', ?)",
+                (f"-{days*2} days",) # Keep logs longer for support
+            )
+            deleted_logs = cursor.rowcount
+            
+            logger.info(f"🧹 Hygiene: Purged {deleted_news} old news items and {deleted_logs} logs.")
+            return deleted_news
+
     def get_user(self, chat_id):
         """Fetches a single user's detailed status (Rule #24)."""
         cursor = self.conn.cursor()
@@ -463,28 +687,37 @@ class Database:
             logger.error(f"DB Maintenance Error: {e}")
             return False
 
-    def backup_db(self):
-        """v16.0: Creates a point-in-time backup of the database."""
+    def backup(self):
+        """v1.3.3: Performs a consistent online backup of the institutional database."""
+        backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        timestamp = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%Y%m%d_%H%M%S")
+        backup_file = os.path.join(backup_dir, f"pulse_backup_{timestamp}.db")
+        
         try:
-            backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
-            os.makedirs(backup_dir, exist_ok=True)
+            # Use SQLite's online backup API for a clean snapshot (Safe for WAL mode)
+            with sqlite3.connect(backup_file) as backup_conn:
+                self.conn.backup(backup_conn)
             
-            # Keep only last 7 backups to save space
-            ts = datetime.now().strftime("%Y%m%d_%H%M")
-            backup_file = os.path.join(backup_dir, f"pulse_backup_{ts}.db")
+            # Update last backup time (Persistent)
+            self.set_config("last_backup", str(time.time()))
+            logger.info(f"✅ Institutional Backup Complete: {os.path.basename(backup_file)}")
             
-            # SQLite Online Backup (Safe for WAL mode)
-            import shutil
-            shutil.copy2(DB_PATH, backup_file)
-            
-            # Cleanup old backups
-            all_backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir)])
-            if len(all_backups) > 7:
-                for old in all_backups[:-7]:
-                    os.remove(old)
-                    
-            logger.info(f"Database Backup Created: {os.path.basename(backup_file)}")
+            # Clean up old backups (keep last 5)
+            backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")])
+            if len(backups) > 5:
+                for b in backups[:-5]:
+                    os.remove(b)
             return True
         except Exception as e:
-            logger.error(f"DB Backup Failed: {e}")
+            logger.error(f"❌ Database backup failure: {e}")
             return False
+
+    def needs_backup(self):
+        """Returns True if last backup was > 24 hours ago."""
+        try:
+            last_ts = float(self.get_config("last_backup") or 0)
+            return (time.time() - last_ts) > 86400
+        except:
+            return True

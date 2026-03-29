@@ -1,22 +1,16 @@
-# Core Dependencies
+# Core System & Web
 requests>=2.31.0
-pandas>=2.0.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 python-dotenv>=1.0.0
+psutil>=5.9.0
+pytz>=2023.3
 
-# AI / LLM Dependencies
-openai>=1.30.0
-pypdf>=4.2.0
-sentence-transformers>=2.7.0
-torch
-transformers
-numpy
-tqdm
-scikit-learn
-
-# Sarvam AI
+# Intelligence & Analysis
 sarvamai
+PyMuPDF>=1.23.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
 
-# Payment Integration
+# Integration
 razorpay>=3.4.0

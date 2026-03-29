@@ -5,8 +5,22 @@ import fitz  # PyMuPDF
 import random
 import time
 from nse_monitor.config import DOWNLOADS_DIR, HEADERS, USER_AGENTS
+from nse_monitor.proxy_manager import ProxyManager
+
+try:
+    import pytesseract
+    from PIL import Image
+    import io
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+import threading
+import gc
 
 logger = logging.getLogger(__name__)
+
+# v1.3.2: RAM-Safe OCR Lock (Ensures only 1 heavy OCR runs at a time on 1GB VPS)
+_ocr_lock = threading.Lock()
 
 class PDFProcessor:
     def __init__(self):
@@ -15,6 +29,7 @@ class PDFProcessor:
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self.archive_base = "https://nsearchives.nseindia.com/corporate/"
+        self.proxy_mgr = ProxyManager()
 
     def download_pdf(self, pdf_url, retries=3):
         """Downloads a PDF with retries and UA rotation to bypass blocks."""
@@ -32,16 +47,17 @@ class PDFProcessor:
             return local_path
 
         for attempt in range(retries):
+            proxy = self.proxy_mgr.get_proxy()
             try:
                 # Rotate User-Agent on each attempt
                 ua = random.choice(USER_AGENTS)
                 self.session.headers.update({"User-Agent": ua})
                 
                 logger.info(f"Downloading PDF (Attempt {attempt+1}/{retries}): {pdf_url}")
+                if proxy: logger.debug(f"Using Proxy for PDF: {proxy['http']}")
                 
                 # Use a fresh landing page visit to stabilize session if needed
-                # (NSE Archive sometimes likes 'referer' consistency)
-                response = self.session.get(pdf_url, timeout=45, stream=True)
+                response = self.session.get(pdf_url, proxies=proxy, timeout=45, stream=True)
                 response.raise_for_status()
 
                 with open(local_path, "wb") as f:
@@ -53,7 +69,8 @@ class PDFProcessor:
                 return local_path
 
             except Exception as e:
-                logger.warning(f"Download attempt {attempt+1} failed: {e}")
+                logger.warning(f"Download attempt {attempt+1} failed with proxy {proxy}: {e}")
+                self.proxy_mgr.remove_dead_proxy(proxy)
                 if attempt < retries - 1:
                     wait_time = random.uniform(2, 5) * (attempt + 1)
                     time.sleep(wait_time)
@@ -88,19 +105,58 @@ class PDFProcessor:
             logger.error(f"Cleanup process failed: {e}")
 
     def extract_text(self, pdf_path):
-        """Extracts text from a local PDF file."""
+        """Extracts text from a local PDF file, with OCR fallback for scanned images."""
         if not pdf_path or not os.path.exists(pdf_path):
             return ""
 
         try:
             logger.info(f"Extracting text from {pdf_path}...")
             text = ""
-            # Absolute check to prevent NameError
             import fitz 
             with fitz.open(pdf_path) as doc:
                 for page in doc:
                     text += page.get_text()
-            return text.strip()
+            
+            # Phase 2: OCR Fallback for scanned PDFs
+            text = text.strip()
+            if len(text) < 50 and OCR_AVAILABLE:
+                logger.warning(f"Extracted <50 chars. Document might be scanned. Attempting OCR...")
+                ocr_text = self._extract_text_ocr(pdf_path)
+                if ocr_text:
+                    text = ocr_text
+                    
+            return text
         except Exception as e:
             logger.error(f"Failed to extract text from {pdf_path}: {e}")
             return ""
+
+    def _extract_text_ocr(self, pdf_path, max_pages=2):
+        """v1.3.2: Safe OCR implementation with global lock & RAM optimization."""
+        with _ocr_lock: # Strict serial processing to save 1GB VPS from OOM
+            try:
+                import fitz
+                text = ""
+                with fitz.open(pdf_path) as doc:
+                    # Limit to first few pages to save RAM
+                    for i in range(min(len(doc), max_pages)):
+                        page = doc[i]
+                        # Moderate DPI (120) for efficiency on 1GB RAM
+                        pix = page.get_pixmap(dpi=120) 
+                        img = Image.open(io.BytesIO(pix.tobytes("jpeg")))
+                        
+                        # Extract text
+                        page_text = pytesseract.image_to_string(img)
+                        text += page_text + "\n"
+                        
+                        # Explicit cleanup per page
+                        del pix
+                        del img
+
+                logger.info(f"✅ Safe OCR successful for {os.path.basename(pdf_path)}.")
+                return text.strip()
+            except Exception as e:
+                logger.error(f"❌ Safe OCR failed for {pdf_path}: {e}")
+                return ""
+            finally:
+                # v1.3.2: Force RAM reclamation
+                gc.collect()

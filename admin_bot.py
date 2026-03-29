@@ -4,6 +4,8 @@ import time
 import os
 import json
 import html
+import psutil
+import shutil
 from datetime import datetime
 import pytz
 from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD, BOT_NAME, TELEGRAM_BOT_TOKEN
@@ -22,13 +24,19 @@ logger = logging.getLogger("NSEAdmin")
 
 class AdminPanel:
     def __init__(self):
-        self.token = TELEGRAM_ADMIN_BOT_TOKEN
+        # v2.0: Separate UI token and Broadcast token
+        self.token = TELEGRAM_ADMIN_BOT_TOKEN or TELEGRAM_BOT_TOKEN
+        self.signal_bot_token = TELEGRAM_BOT_TOKEN
+        
         self.owner_id = str(TELEGRAM_ADMIN_CHAT_ID)
         self.base_url = f"https://api.telegram.org/bot{self.token}"
-        self.signal_bot_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        self.signal_bot_url = f"https://api.telegram.org/bot{self.signal_bot_token}"
+        self.broadcast_url = f"{self.signal_bot_url}/sendMessage"
+        self.sessions_file = os.path.join("data", "admin_sessions.json")
+        
         self.db = Database()
         self.last_update_id = 0
-        self.authenticated_sessions = {} # chat_id: timestamp
+        self.authenticated_sessions = self._load_sessions() # chat_id: timestamp
         self._set_latest_offset()
 
     def _set_latest_offset(self):
@@ -84,7 +92,8 @@ class AdminPanel:
             parts = text.split()
             if len(parts) == 2 and parts[1] == ADMIN_PASSWORD:
                 self.authenticated_sessions[chat_id] = time.time()
-                self._send(chat_id, "🔓 <b>Authentication Successful!</b>\nYou now have 60 minutes of admin access.")
+                self._save_sessions() # v1.3 Persistence
+                self._send(chat_id, "🔓 <b>Authentication Successful!</b>\nYou now have persistent admin access.")
                 self._send_main_menu(chat_id)
             else:
                 self._send(chat_id, "🚫 <b>Invalid Credentials.</b>")
@@ -98,10 +107,10 @@ class AdminPanel:
         # 3. Command Router
         if text == "/start" or text == "/admin":
             self._send_main_menu(chat_id)
-        elif text == "/list":
-            self._handle_list(chat_id)
         elif text == "/status":
             self._handle_status(chat_id)
+        elif text == "/pulse":
+            self._handle_pulse(chat_id)
         elif text == "/users":
             self._handle_users(chat_id)
         elif text.startswith("/find"):
@@ -126,6 +135,23 @@ class AdminPanel:
             self._handle_list(chat_id, 0)
         elif data == "menu_broadcast":
             self._send(chat_id, "📢 Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+        elif data == "menu_config":
+            self._show_config_menu(chat_id)
+        elif data == "menu_hisab":
+            self._handle_global_hisab(chat_id)
+        elif data == "menu_rescue":
+            self._handle_system_rescue(chat_id)
+        elif data.startswith("set_threshold_"):
+            val = data.split("_")[2]
+            self.db.set_config("ai_threshold", val)
+            self._answer_callback(cb["id"], f"✅ AI Threshold set to {val}", show_alert=True)
+            self._show_config_menu(chat_id)
+        elif data == "toggle_media_mute":
+            current = self.db.get_config("media_mute", "0")
+            new_val = "1" if current == "0" else "0"
+            self.db.set_config("media_mute", new_val)
+            self._answer_callback(cb["id"], f"✅ Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
+            self._show_config_menu(chat_id)
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
             offset = page * 10
@@ -146,6 +172,28 @@ class AdminPanel:
             _, uid, days = data.split("_")
             self._execute_grant_interactive(chat_id, uid, int(days))
         
+        elif data == "menu_main":
+            self._send_main_menu(chat_id)
+        elif data == "action_vacuum":
+            try:
+                self.db.conn.execute("VACUUM")
+                self._answer_callback(cb["id"], "✅ Database Vacuum Complete!", show_alert=True)
+            except Exception as e:
+                self._answer_callback(cb["id"], f"❌ Error: {e}", show_alert=True)
+        elif data == "action_purge":
+            try:
+                deleted = self.db.purge_old_data(days=30)
+                self._answer_callback(cb["id"], f"✅ Purge Complete: {deleted} items removed.", show_alert=True)
+            except Exception as e:
+                self._answer_callback(cb["id"], f"❌ Purge Failed: {e}", show_alert=True)
+        elif data == "action_sync_holidays":
+            from nse_monitor.trading_calendar import TradingCalendar
+            success = TradingCalendar.sync_from_nse()
+            if success:
+                self._answer_callback(cb["id"], "✅ NSE Holidays Synced Successfully!", show_alert=True)
+            else:
+                self._answer_callback(cb["id"], "❌ Sync Failed. Check logs.", show_alert=True)
+        
         self._answer_callback(cb["id"])
 
     def _send_main_menu(self, chat_id):
@@ -163,9 +211,73 @@ class AdminPanel:
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "📊 System Status", "callback_data": "menu_status"}],
-                [{"text": "📋 Full User List", "callback_data": "menu_list"}],
-                [{"text": "📢 Mass Broadcast", "callback_data": "menu_broadcast"}]
+                [{"text": "📊 System Status", "callback_data": "menu_status"}, {"text": "⚙️ Bot Config", "callback_data": "menu_config"}],
+                [{"text": "📋 User Audit", "callback_data": "menu_list"}, {"text": "📈 Global Hisab", "callback_data": "menu_hisab"}],
+                [{"text": "📢 Broadcast", "callback_data": "menu_broadcast"}, {"text": "🆘 DB Rescue", "callback_data": "menu_rescue"}]
+            ]
+        }
+        self._send(chat_id, text, keyboard)
+
+    def _show_config_menu(self, chat_id):
+        thresh = self.db.get_config("ai_threshold", "5")
+        mute = self.db.get_config("media_mute", "0")
+        
+        mute_label = "🔇 UNMUTE Media" if mute == "1" else "🔈 MUTE Media"
+        
+        text = (
+            f"⚙️ <b>BOT LIVE CONFIG</b>\n"
+            f"────────────────────────\n"
+            f"🎯 <b>Current Threshold:</b> {thresh}/10\n"
+            f"📢 <b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"────────────────────────\n"
+            f"<i>Changes apply instantly to the next cycle.</i>"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🎯 Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
+                [{"text": "🎯 Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
+                [{"text": "🎯 Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
+                [{"text": mute_label, "callback_data": "toggle_media_mute"}],
+                [{"text": "🔙 Back to Main Menu", "callback_data": "menu_main"}]
+            ]
+        }
+        self._send(chat_id, text, keyboard)
+
+    def _handle_global_hisab(self, chat_id):
+        """v2.0: Industrial Audit of all system credit movements."""
+        debits, users = self.db.get_global_hisab(days=1)
+        debits_week, users_week = self.db.get_global_hisab(days=7)
+        
+        text = (
+            f"📈 <b>GLOBAL AUDIT (HISAB)</b>\n"
+            f"────────────────────────\n"
+            f"<b>Today's Volume:</b>\n"
+            f"💳 Deducted: <b>{debits} Market Days</b>\n"
+            f"👥 Unique Users: {users}\n\n"
+            f"<b>Last 7 Days:</b>\n"
+            f"💳 Total Debits: {debits_week}\n"
+            f"👥 Unique Reach: {users_week}\n"
+            f"────────────────────────\n"
+            f"📍 <i>Internal Finance Audit Only</i>"
+        )
+        self._send(chat_id, text)
+
+    def _handle_system_rescue(self, chat_id):
+        """Allows manual DB maintenance from Telegram."""
+        text = (
+            "🆘 <b>SYSTEM RESCUE & MAINTENANCE</b>\n"
+            "────────────────────────\n"
+            "⚠️ <b>WARNING:</b> These actions are destructive or performance intensive.\n\n"
+            "<b>1. Repair DB:</b> Runs VACUUM to fix minor corruption.\n"
+            "<b>2. Update Holidays:</b> Live Sync from NSE server.\n"
+            "<b>3. Purge Engine:</b> Deletes news older than 30 days.\n"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🛠️ Run DB Vacuum", "callback_data": "action_vacuum"}],
+                [{"text": "🗓️ Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
+                [{"text": "🧹 Purge Old News", "callback_data": "action_purge"}],
+                [{"text": "🔙 Back", "callback_data": "menu_main"}]
             ]
         }
         self._send(chat_id, text, keyboard)
@@ -349,21 +461,99 @@ class AdminPanel:
         count = 0
         for uid in active_users:
             try:
-                self._send(uid, f"📢 <b>ADMIN ANNOUNCEMENT</b>\n────────────────────────\n{msg_body}")
+                # v2.0: Always use Signal Bot for user broadcasts
+                self._send(uid, f"📢 <b>ADMIN ANNOUNCEMENT</b>\n────────────────────────\n{msg_body}", use_signal_bot=True)
                 count += 1
                 time.sleep(0.05)
-            except: pass
-        self._send(chat_id, f"✅ <b>Broadcast complete.</b> Sent to {count} users.")
+            except Exception as e:
+                logger.error(f"Broadcast failed for {uid}: {e}")
+        
+        self._send(chat_id, f"✅ <b>Broadcast complete.</b> Sent to {count} active users.")
 
-    def _send(self, chat_id, text, keyboard=None):
+    def _send(self, chat_id, text, keyboard=None, use_signal_bot=False):
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if keyboard: payload["reply_markup"] = keyboard
-        requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
+        
+        url = self.broadcast_url if use_signal_bot else f"{self.base_url}/sendMessage"
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            logger.error(f"Admin Bot: Failed to send msg to {chat_id}: {e}")
 
-    def _answer_callback(self, cb_id, text=None):
+    def _answer_callback(self, cb_id, text=None, show_alert=False):
         payload = {"callback_query_id": cb_id}
-        if text: payload["text"] = text
+        if text: 
+            payload["text"] = text
+            payload["show_alert"] = show_alert
         requests.post(f"{self.base_url}/answerCallbackQuery", json=payload, timeout=5)
+
+    def _load_sessions(self):
+        """v1.3: Loads admin sessions from JSON to survive restarts."""
+        if os.path.exists(self.sessions_file):
+            try:
+                with open(self.sessions_file, "r") as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def _save_sessions(self):
+        """v1.3: Persists admin sessions to disk."""
+        os.makedirs("data", exist_ok=True)
+        try:
+            with open(self.sessions_file, "w") as f:
+                json.dump(self.authenticated_sessions, f)
+        except Exception as e:
+            logger.error(f"Failed to save admin sessions: {e}")
+
+    def _handle_pulse(self, chat_id):
+        """v1.3.3: High-resolution system health & pulse monitoring."""
+        self._send_raw(chat_id, "🔍 <b>Fetching Industrial Pulse...</b>")
+        
+        # 1. Uptime calculation
+        try:
+            from nse_monitor.main import START_TIME
+            uptime_sec = time.time() - START_TIME
+        except:
+            uptime_sec = 0
+            
+        days, rem = divmod(uptime_sec, 86400)
+        hours, rem = divmod(rem, 3600)
+        mins, _ = divmod(rem, 60)
+        uptime_str = f"{int(days)}d {int(hours)}h {int(mins)}m"
+        
+        # 2. Disk & DB Size
+        from nse_monitor.config import DB_PATH
+        db_size_mb = os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) / (1024 * 1024) or 0
+        try:
+            total, used, free = shutil.disk_usage("/")
+            disk_used_pct = (used / total) * 100
+        except: disk_used_pct = 0
+        
+        # 3. RAM Usage
+        ram = psutil.virtual_memory()
+        
+        # 4. Last Backup
+        last_bk = self.db.get_config("last_backup", "Never")
+        if last_bk != "Never":
+            try:
+                last_bk = datetime.fromtimestamp(float(last_bk)).strftime("%d %b, %H:%M")
+            except: pass
+            
+        msg = (
+            f"🛰️ <b>{BOT_NAME} — INDUSTRIAL PULSE</b>\n"
+            f"────────────────────────\n"
+            f"📈 <b>Uptime:</b> <code>{uptime_str}</code>\n"
+            f"🗄️ <b>DB Size:</b> <code>{db_size_mb:.2f} MB</code>\n"
+            f"💾 <b>Disk Used:</b> <code>{disk_used_pct:.1f}%</code>\n"
+            f"🧠 <b>RAM Used:</b> <code>{ram.percent}%</code>\n"
+            f"🛡️ <b>Last Backup:</b> <code>{last_bk}</code>\n"
+            f"────────────────────────\n"
+            f"✅ <b>Status:</b> INSTITUTIONAL PRO\n"
+            f"📍 <i>Server Time: {datetime.now().strftime('%H:%M:%S')}</i>"
+        )
+        
+        self._send_raw(chat_id, msg)
 
 if __name__ == "__main__":
     AdminPanel().run()

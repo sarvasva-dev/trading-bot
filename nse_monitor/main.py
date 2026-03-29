@@ -3,16 +3,13 @@ import sys
 import os
 import hashlib
 import time
-import difflib
-import schedule
 import warnings
 from datetime import datetime
 import pytz
-
+import threading
 import atexit
 import signal
-
-import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -21,84 +18,125 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def check_single_instance():
     """Ensures only one instance of the bot is running using a PID file lock."""
     pid_file = "nsebot.pid"
-    if os.path.isfile(pid_file):
+    import psutil
+    if os.path.exists(pid_file):
         try:
             with open(pid_file, 'r') as f:
                 old_pid = int(f.read().strip())
-            try:
-                os.kill(old_pid, 0)
+            if psutil.pid_exists(old_pid):
                 logger.error(f"FATAL: Instance already running (PID {old_pid}).")
                 sys.exit(1)
-            except OSError:
-                if os.path.exists(pid_file): os.remove(pid_file)
-        except:
-             if os.path.exists(pid_file): os.remove(pid_file)
+            else:
+                os.remove(pid_file)
+        except Exception:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
     with open(pid_file, 'w') as f:
         f.write(str(os.getpid()))
     atexit.register(lambda: os.remove(pid_file) if os.path.exists(pid_file) else None)
 
-from nse_monitor.config import LOGS_DIR, ALERT_THRESHOLD, MAX_ALERTS_PER_HOUR, BOT_NAME
+
+from nse_monitor.config import (
+    LOGS_DIR, ALERT_THRESHOLD, MAX_ALERTS_PER_HOUR, BOT_NAME,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ROOT_DIR
+)
 from nse_monitor.database import Database
 from nse_monitor.report_builder import ReportBuilder
 from nse_monitor.telegram_bot import TelegramBot
 from nse_monitor.sources.nse_source import NSESource
-from nse_monitor.llm_processor import LLMProcessor
-from nse_monitor.pdf_processor import PDFProcessor
-from nse_monitor.watchdog import BotWatchdog
-from nse_monitor.config import (
-    BOT_NAME, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID,
-    LOGS_DIR, ALERT_THRESHOLD, ROOT_DIR
-)
+from nse_monitor.sources.nse_sme_source import NseSmeSource
 from nse_monitor.sources.economic_times_source import EconomicTimesSource
 from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
 from nse_monitor.sources.bulk_deal_source import BulkDealSource
+from nse_monitor.llm_processor import LLMProcessor
+from nse_monitor.pdf_processor import PDFProcessor
+from nse_monitor.watchdog import BotWatchdog
+from nse_monitor.telegram_notifier import TelegramNotifier
+from nse_monitor.trading_calendar import TradingCalendar
 
-# Logging Setup
+import logging.handlers
+
+# ── Global Uptime Tracker ───────────────────────────────────────────────────
+START_TIME = time.time()
+
+# ── Logging Setup ─────────────────────────────────────────────────────────────
 def ist_time(*args):
     return datetime.now(pytz.timezone('Asia/Kolkata')).timetuple()
 
 logging.Formatter.converter = ist_time
-
 os.makedirs(LOGS_DIR, exist_ok=True)
+
+# v1.3.3: Rotating Logs (Max 5MB per file, 3 backups)
+_log_path = os.path.join(LOGS_DIR, "app.log")
+_log_handler = logging.handlers.RotatingFileHandler(
+    _log_path, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(os.path.join(LOGS_DIR, "app.log"))]
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        _log_handler
+    ]
 )
 logger = logging.getLogger("NSEPulse")
 
+
 class MarketIntelligenceSystem:
     def __init__(self):
-        logger.info("Initializing Signal Engine v11.0 (Admin Mastery)...")
+        logger.info(f"═══════════════════════════════════════════")
+        logger.info(f"  {BOT_NAME} v1.0 — Industrial Engine Boot")
+        logger.info(f"═══════════════════════════════════════════")
+
+        self.ist = pytz.timezone("Asia/Kolkata")
         self.db = Database()
+
+        # v1.3: Real-time 'IP Pressure' bridge for Admin Notifications
+        def notify_admin_on_ban(alert_text):
+            if hasattr(self, 'bot'):
+                self.bot.send_admin_alert(alert_text)
+
         from nse_monitor.nse_api import NSEClient
-        self.nse_client = NSEClient()
+        self.nse_client = NSEClient(on_403=notify_admin_on_ban)
+
         self.bot = TelegramBot(db=self.db, nse_client=self.nse_client)
         self.pdf_processor = PDFProcessor()
         self.llm_processor = LLMProcessor()
         self.report_builder = ReportBuilder(self.bot, self.db, self.llm_processor)
+        self.calendar = TradingCalendar()
 
-        # RULE #1: NSE ONLY (Primary Institutional Intel) | RULE #14: Multi-Source Support
+        # v1.0: Full source suite including SME
         self.sources = [
             NSESource(client=self.nse_client),
+            NseSmeSource(client=self.nse_client),    # NEW: SME Segment
             EconomicTimesSource(),
             MoneycontrolSource(),
-            BulkDealSource()
+            BulkDealSource(nse_client=self.nse_client),
         ]
-        
-        # v15.0: Memory for Thematic Clustering (headline_hash -> timestamp)
+
+        # v1.0: Thematic Clustering Memory (symbol → last_alert_timestamp)
         self.alert_memory = {}
-        
-        # v16.0: Watchdog (Heartbeat Monitor)
+
+        # v1.1: Notifiers & Watchdog
+        self.notifier = TelegramNotifier()
         log_file = os.path.join(ROOT_DIR, "logs", "service.log")
-        self.watchdog = BotWatchdog(TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_BOT_TOKEN, log_file)
-        
-        # RULE #18: Threaded Telegram Handler
+        self.watchdog = BotWatchdog(self.notifier, log_file)
+
+        # v1.1: Thread-safe memory lock
+        self.memory_lock = threading.Lock()
+
+        # Threaded Telegram Handler
         self.bot.register_menu_commands()
-        self.update_thread = threading.Thread(target=self._update_polling_loop, daemon=True)
+        self.update_thread = threading.Thread(
+            target=self._update_polling_loop, daemon=True
+        )
         self.update_thread.start()
 
+        logger.info("✅ All systems initialized. v1.0 Online.")
+
     def _update_polling_loop(self):
+        """Background thread: handles Telegram user messages without blocking main cycle."""
         while True:
             try:
                 self.bot.handle_updates()
@@ -108,35 +146,46 @@ class MarketIntelligenceSystem:
                 time.sleep(5)
 
     def is_market_hours(self):
-        tz = pytz.timezone("Asia/Kolkata")
-        now = datetime.now(tz)
-        return 9 <= now.hour < 16 and now.weekday() < 5
+        """v1.0: Uses TradingCalendar for accurate market hours check."""
+        now = datetime.now(self.ist)
+        if not TradingCalendar.is_trading_day(now):
+            return False
+        return 9 <= now.hour < 16
 
     def daily_maintenance(self):
-        """Runs at midnight IST to decrement market days and send reminders."""
+        """
+        v1.0: Runs at midnight IST.
+        - Deducts 1 credit ONLY on real trading days (respects NSE holidays).
+        - Sends expiry reminders to exhausted users.
+        - Runs DB maintenance and backup.
+        """
         now = datetime.now(self.ist)
-        # 1. Decrement credits (ONLY Mon-Fri)
-        if now.weekday() <= 4:
-            logger.info("Market Day Detected. Decrementing user credits...")
+
+        # v1.0: Holiday-aware credit deduction
+        if TradingCalendar.is_trading_day(now):
+            logger.info(f"📅 Trading Day ({now.strftime('%d %b %Y')}): Decrementing user credits...")
             self.db.decrement_working_days()
         else:
-            logger.info("Weekend Detected. Skipping subscription decrement.")
+            holiday_name = TradingCalendar.get_holiday_name(now)
+            reason = f"NSE Holiday ({holiday_name})" if holiday_name else "Weekend"
+            logger.info(f"🗓️ {reason}: Skipping credit deduction.")
 
-        # 2. Send Expiry Reminders to EXPIRED users (Every day)
+        # Send expiry reminders
         expired_users = self.db.get_expired_users()
         if expired_users:
             logger.info(f"Sending expiry reminders to {len(expired_users)} users...")
             for chat_id in expired_users:
                 try:
                     self.bot._send_expiry_reminder(chat_id)
-                except: continue
+                except Exception:
+                    continue
 
-        # 3. v15.5 - v16.0: Database Health & Backups
+        # v1.3.3: DB Maintenance and Backup
         self.db.run_maintenance()
-        self.db.backup_db()
+        self.db.backup()
 
     def send_preexpiry_reminders(self):
-        """Runs at 6 PM IST — warns users with exactly 1 day left to renew."""
+        """Runs at 6 PM IST — warns users with 1 day left."""
         users = self.db.get_expiring_soon_users()
         if not users:
             return
@@ -147,7 +196,7 @@ class MarketIntelligenceSystem:
                     f"⚠️ <b>Heads up, {first_name}!</b>\n"
                     f"────────────────────────\n"
                     f"Your Market Pulse subscription expires <b>tomorrow</b>.\n\n"
-                    f"Renew now to keep receiving institutional NSE signals without any interruption. 📈\n"
+                    f"Renew now to keep receiving institutional NSE signals. 📈\n"
                 )
                 self.bot._send_raw(chat_id, msg, {
                     "inline_keyboard": [
@@ -155,261 +204,297 @@ class MarketIntelligenceSystem:
                         [{"text": "🛠️ Contact Admin", "url": "https://wa.me/917985040858"}]
                     ]
                 })
-            except: continue
+            except Exception:
+                continue
 
     def check_pending_payments(self):
-        """Polls Razorpay for the status of pending links (Rule #24)."""
+        """Polls Razorpay for pending payment links and auto-activates on success."""
         pending_links = self.db.get_pending_payment_links()
-        if not pending_links: return
-        
+        if not pending_links:
+            return
+
         for pl_id, chat_id, days in pending_links:
             try:
-                days_to_add = self.payment_processor.verify_payment_status(pl_id)
+                from nse_monitor.payment_processor import RazorpayProcessor
+                rp = RazorpayProcessor()
+                days_to_add = rp.verify_payment_status(pl_id)
                 if days_to_add:
-                    # 1. Credit the user
                     self.db.add_working_days(chat_id, days_to_add)
-                    # 2. Mark as processed
                     self.db.update_payment_link_status(pl_id, 'processed')
-                    # 3. Notify user (Rule #24)
                     msg = (
                         f"✅ <b>Payment Successful!</b>\n"
                         f"────────────────────────\n"
-                        f"We've verified your transaction (Ref: <code>{pl_id}</code>).\n\n"
-                        f"<b>{days_to_add} Market Days</b> have been added to your account.\n"
-                        f"Use /plan to see your new expiry date. 📈"
+                        f"Ref: <code>{pl_id}</code>\n\n"
+                        f"<b>{days_to_add} Market Days</b> added. Use /plan to view expiry. 📈"
                     )
                     self.bot._send_raw(chat_id, msg)
                     logger.warning(f"AUTO-PAYMENT SUCCESS: {chat_id} | +{days_to_add} days")
-                else:
-                    # Plan days might be 0 but status could be paid? 
-                    # verify_payment_status returns 'days' only if paid.
-                    pass
             except Exception as e:
                 logger.error(f"Error during auto-payment check for {pl_id}: {e}")
 
-    def start(self):
-        """Initializes all polling and reporting jobs."""
-        logger.info(f"Initializing {BOT_NAME} Schedule (v16.0)...")
-        
-        # v16.0: Start Watchdog Thread
-        self.watchdog.start()
-        
-        # 1. Market Intel Polling (Every 3 Minutes)
-        self.scheduler.add_job(self.safe_run_cycle, 'interval', minutes=3, id='market_cycle')
-        
-        # 2. Daily Morning Report (08:30 AM IST)
-        self.scheduler.add_job(self.report_builder.generate_morning_report, 'cron', 
-                               hour=8, minute=30, id='morning_report', timezone=self.ist)
-        
-        # 3. User Message Polling (Every 1 Minute)
-        self.scheduler.add_job(self.bot.handle_updates, 'interval', 
-                               seconds=30, id='telegram_updates')
-
-        # 4. Midnight Maintenance (00:00 IST) - Rule #24
-        self.scheduler.add_job(self.daily_maintenance, 'cron', hour=0, minute=0, id='midnight_sync', timezone=self.ist)
-        
-        # 5. Auto-Payment Verification (Every 1 Minute) - Rule #24
-        self.scheduler.add_job(self.check_pending_payments, 'interval', minutes=1, id='payment_poller')
-
-        # 6. 24h Pre-Expiry Reminder (6:00 PM IST) - v12.0
-        self.scheduler.add_job(self.send_preexpiry_reminders, 'cron',
-                               hour=18, minute=0, id='preexpiry_reminder', timezone=self.ist)
-
-        logger.info("Scheduler started (08:30 IST Reports | 18:00 Pre-Expiry | 1-Min Auto-Pay | 3-Min Polling).")
-        self.scheduler.start()
-
-    def safe_run_cycle(self):
-        """Wrapper for run_cycle to catch exceptions."""
-        try:
-            self.run_cycle()
-        except Exception as e:
-            logger.error(f"Error during scheduled run_cycle: {e}", exc_info=True)
-
+    # ── v1.0: ZERO-LOSS INTELLIGENCE CYCLE ───────────────────────────────────
     def run_cycle(self):
-        """High-precision analysis cycle."""
-        logger.info("Starting intelligence cycle...")
-        self.watchdog.heartbeat() # v16.0 Pulse
-        
-        # 1. Fetching
+        """
+        v1.0: Zero-Loss Intelligence Cycle.
+        STEP 1: Fetch & Ingest — all new items go into DB as 'Pending' (status=0).
+        STEP 2: Process — take 4 oldest Pending items, run them through AI.
+        STEP 3: Dispatch — if score passes threshold, send via Async broadcaster.
+        """
+        logger.info("╔══════════════════════════════════════╗")
+        logger.info("║   v1.0 Intelligence Cycle — START    ║")
+        logger.info("╚══════════════════════════════════════╝")
+        self.watchdog.heartbeat()
+
+        # ── STEP 1: FETCH & INGEST ALL SOURCES ───────────────────────────────
         raw_items = []
         for source in self.sources:
             try:
-                # Fixed: Use .fetch() instead of .get_announcements()
                 items = source.fetch()
                 if items:
-                    # RULE #3 & #6: Strict Filtering
                     tz = pytz.timezone("Asia/Kolkata")
                     now = datetime.now(tz)
-                    ignore = ["trading window", "shareholding pattern", "compliance certificate"]
-                    
-                    logger.info(f"Filtering {len(items)} items for {BOT_NAME} purity...")
-                    passed_age = 0
+                    # Noise filter
+                    ignore_kw = [
+                        "trading window", "shareholding pattern",
+                        "compliance certificate", "postal ballot",
+                        "record date for agm", "registered office"
+                    ]
                     for item in items:
-                        if any(kw in item['headline'].lower() for kw in ignore): continue
+                        # v2.0: Media Mute Filter (Live Admin Control)
+                        is_official = item.get("source") in ("NSE", "NSE_SME")
+                        media_mute = self.db.get_config("media_mute", "0") == "1"
                         
-                        try:
-                            # Enhanced Institutional Parser (Rule #2)
-                            ts_str = item.get('timestamp', '')
-                            if not ts_str: continue
-                            
-                            try:
-                                # Try standard formats used by NSE
-                                if '-' in ts_str and ':' in ts_str:
-                                    if len(ts_str.split('-')[0]) == 4: # YYYY-MM-DD
-                                        ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).astimezone(tz)
-                                    else: # DD-MM-YYYY or DD-Mon-YYYY
-                                        ts = datetime.strptime(ts_str, "%d-%b-%Y %H:%M:%S").astimezone(tz)
-                                else:
-                                    ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).astimezone(tz)
-                            except:
-                                # Fallback for simple date
-                                ts = datetime.strptime(ts_str.split('.')[0], "%Y-%m-%dT%H:%M:%S").astimezone(tz) if 'T' in ts_str else now
-
-                            age = (now - ts).total_seconds() / 60
-                            # Increased to 24 hours for better test visibility
-                            if age > 1440: continue 
-                            item['age_minutes'] = age
-                            passed_age += 1
-                        except Exception as e:
-                            logger.debug(f"Timestamp Parse Skip: {e} | Data: {ts_str}")
+                        if not is_official and media_mute:
+                            logger.debug(f"🔇 Skipping Media item due to LIVE MUTE: {item.get('headline', '')[:50]}")
                             continue
-                        
+
+                        if any(kw in item.get('headline', '').lower() for kw in ignore_kw):
+                            continue
+
+                        # Timestamp-based age filter (max 24h lookback)
+                        ts_str = item.get('timestamp', '')
+                        if ts_str:
+                            try:
+                                if 'T' in ts_str:
+                                    ts = datetime.fromisoformat(
+                                        ts_str.replace('Z', '+00:00')
+                                    ).astimezone(tz)
+                                elif '-' in ts_str and ':' in ts_str:
+                                    if len(ts_str.split('-')[0]) == 4:
+                                        ts = datetime.fromisoformat(ts_str).astimezone(tz)
+                                    else:
+                                        ts = datetime.strptime(
+                                            ts_str, "%d-%b-%Y %H:%M:%S"
+                                        ).replace(tzinfo=tz)
+                                else:
+                                    ts = now
+                                age_min = (now - ts).total_seconds() / 60
+                                if age_min > 1440:  # Older than 24h
+                                    continue
+                                item['age_minutes'] = age_min
+                            except Exception:
+                                item['age_minutes'] = 0
+
                         raw_items.append(item)
-                    logger.info(f"Purity Filter: {passed_age} items passed age/noise criteria.")
+                    logger.info(f"Source [{source.NAME}]: {len(items)} fetched, after filter: {len(raw_items)} total so far.")
             except Exception as e:
-                logger.error(f"Source Fetch Error: {e}")
+                logger.error(f"Source [{getattr(source, 'NAME', '?')}] Fetch Error: {e}")
 
-        # 2. Ingestion
-        new_items = []
+        # ── INGEST INTO DB (deduplication happens here) ───────────────────────
+        ingested = 0
         for item in raw_items:
-            # Check by URL and Content Hash
-            content_hash = hashlib.sha256(item['headline'].encode()).hexdigest()
-            if self.db.news_exists(item.get("url"), content_hash): continue
+            # STEP 1.2: Identity Hash (v2.0 Unified)
+            # Combines headline, symbol, and raw source id to prevent cross-source collisions
+            raw_id = item.get('raw_id', '')
+            hash_input = f"{item.get('headline', '').lower()}|{item.get('symbol', 'N/A').upper()}|{raw_id}"
+            content_hash = hashlib.sha256(hash_input.encode()).hexdigest()
             
-            item["content_hash"] = content_hash
-            item["db_id"] = self.db.add_news_item(item)
-            new_items.append(item)
+            existing_id, existing_source = self.db.news_exists(item.get("url"), content_hash)
+            if existing_id:
+                # v2.0 Upranking Logic: If existing is Media and new is Official, promote it.
+                is_current_official = item.get("source") in ("NSE", "NSE_SME")
+                is_existing_media = existing_source not in ("NSE", "NSE_SME")
+                
+                if is_current_official and is_existing_media:
+                    logger.info(f"🔄 Upranking {existing_id}: {existing_source} -> {item.get('source')} (Official Filing found)")
+                    self.db.update_news_source(existing_id, item.get("source"))
+                continue
 
-        if not new_items:
-            logger.info(f"📡 Scanning... {len(raw_items)} NSE items evaluated. No new institutional triggers in this cycle.")
+            item["content_hash"] = content_hash
+            db_id = self.db.add_news_item(item)
+            if db_id:
+                ingested += 1
+
+        logger.info(f"📥 Ingested {ingested} new items into Zero-Loss Queue.")
+
+        # ── STEP 2: PROCESS TOP 4 PENDING ITEMS ─────────────────────────────
+        pending_items = self.db.get_pending_news(limit=4)
+        if not pending_items:
+            logger.info("📡 Queue empty — no pending items to process this cycle.")
             return False
 
-        # 3. Processing
-        processed_count = 0
-        used_sectors = set()
-        alert_sent = False
+        logger.info(f"🔄 Processing {len(pending_items)} pending items from queue...")
+
         market_on = self.is_market_hours()
+        alert_sent = False
+        used_symbols = set()
 
-        for item in new_items:
-            if processed_count >= 4: break # RULE #14
-            
-            # PDF Data Extraction
-            if item.get("url"):
-                pdf_path = self.pdf_processor.download_pdf(item["url"])
-                text = self.pdf_processor.extract_text(pdf_path)
-                if text:
-                    item["summary"] += f"\n[FILING]: {text[:3000]}"
-                    self.db.update_news_summary(item["db_id"], item["summary"])
-
-            # v15.0: Deep Intelligence Filtering (Tiered Logic)
-            analysis = self.llm_processor.analyze_single_event(
-                [item], 
-                market_status="OPEN" if market_on else "CLOSED",
-                source_name=item.get("source", "NSE")
-            )
-            
-            if not analysis:
-                logger.error(f"❌ [AI FAILURE] {item.get('symbol', 'N/A')}: LLM returned None or parse error.")
-                continue
-                
-            # RULE #15: Tiered Thresholding
-            score = analysis.get("impact_score", 0)
-            is_official = item.get("source") == "NSE"
-            required_score = 5 if is_official else 8
-            
-            if not analysis.get("valid_event") or score < required_score:
-                logger.info(f"Rejected: {item.get('headline')[:50]}... | Score: {score} | Req: {required_score}")
-                continue
-
-            # v15.0: Thematic Clustering (Deduplication 2.0)
-            # Check if this company already had a high-impact alert in the last 60 mins
-            symbol = analysis.get("symbol", "GENERIC")
-            now_ts = time.time()
-            
-            # Clean up old memory (older than 60 mins)
-            self.alert_memory = {k: v for k, v in self.alert_memory.items() if now_ts - v < 3600}
-            
-            if symbol != "N/A" and symbol in self.alert_memory:
-                logger.info(f"Clustering: Suppressing duplicate alert for {symbol} (Sent {int((now_ts - self.alert_memory[symbol])/60)}m ago)")
-                continue
-            
-            # Register in memory
-            if symbol != "N/A":
-                self.alert_memory[symbol] = now_ts
-                
-            # 4. Dispatch
-            self.bot.send_signal(item, analysis)
-            processed_count += 1
-            alert_sent = True
-            import nse_monitor.config as config
-            impact = analysis.get("impact_score", 0)
-            sentiment = analysis.get("sentiment", "Neutral")
-            
-            if impact < config.ALERT_THRESHOLD:
-                logger.info(f"📉 [AI RESULT] {item.get('symbol', 'N/A')} | Score: {impact} | Status: Rejected (Below Threshold)")
-                continue
-            
-            logger.info(f"🔥 [AI ALERT] {item.get('symbol', 'N/A')} | Score: {impact} | sentiment: {sentiment} -> BROADCASTING")
-            
-            sector = analysis.get("sector", "Unknown")
-            if sector in used_sectors and impact < 8: continue # RULE #15 diversity
-
-            # Speed Check (RULE #4)
-            if market_on and item.get('age_minutes', 99) >= 5 and impact < 8: continue
-
-            # Final Alert
-            if self.bot.send_alert({
-                "symbol": analysis.get("symbol", "N/A"),
-                "trigger": analysis.get("trigger", "N/A"),
-                "url": item["url"],
-                "impact_score": impact,
-                "sentiment": analysis.get("sentiment", "Neutral"),
-                "ai_report": analysis
-            }):
-                self.db.mark_alert_sent(item["db_id"])
-                alert_sent = True
-                processed_count += 1
-                used_sectors.add(sector)
-            
-            time.sleep(5)
+        # v1.1 - Concurrent AI Processing using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(self._process_single_item, item, market_on) for item in pending_items]
+            for future in as_completed(futures):
+                try:
+                    res = future.result()
+                    if res: alert_sent = True
+                except Exception as e:
+                    logger.error(f"Error in concurrent AI task: {e}")
 
         return alert_sent
 
+    def _process_single_item(self, item, market_on):
+        """Worker method for processing a single news item concurrently."""
+        news_id = item['db_id']
+        alert_sent_flag = False
+
+        # ── PDF Enrichment ───────────────────────────────────────────────
+        if item.get("url"):
+            try:
+                pdf_path = self.pdf_processor.download_pdf(item["url"])
+                text = self.pdf_processor.extract_text(pdf_path)
+                if text and len(text) > 100:
+                    meaningful = text[500:4000].strip()
+                    item["summary"] = (item.get("summary", "") + f"\n[FILING EXTRACT]: {meaningful}")
+                    self.db.update_news_summary(news_id, item["summary"])
+            except Exception as e:
+                logger.debug(f"PDF enrichment failed for {news_id}: {e}")
+
+        # ── AI Analysis ──────────────────────────────────────────────────
+        source_name = item.get("source", "NSE")
+        analysis = self.llm_processor.analyze_single_event(
+            [item],
+            market_status="OPEN" if market_on else "CLOSED",
+            source_name=source_name
+        )
+
+        if not analysis:
+            logger.error(f"❌ AI returned None for: {item.get('headline', '')[:60]}")
+            self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
+            return False
+
+        score = analysis.get("impact_score", 0)
+        valid = analysis.get("valid_event", False)
+
+        is_official = source_name in ("NSE", "NSE_SME")
+        from nse_monitor.config import ALERT_THRESHOLD
+        
+        # v2.0: Use Live Config from DB
+        db_threshold = int(self.db.get_config("ai_threshold", ALERT_THRESHOLD))
+        required_score = db_threshold if is_official else (db_threshold + 2)
+
+        self.db.mark_analysis_complete(
+            news_id, score, analysis.get("sentiment", "Neutral"),
+            trigger=analysis.get("trigger"),
+            perspective=analysis.get("sector"), alerted=False
+        )
+
+        if not valid or score < required_score:
+            logger.info(f"Rejected: {item.get('headline', '')[:50]}... | Score: {score} | Required: {required_score}")
+            return False
+
+        # ── Thematic Deduplication (Thread Safe) ─────────────────────────
+        symbol = str(analysis.get("symbol", "UNKNOWN")).upper()
+        now_ts = time.time()
+        
+        with self.memory_lock:
+            # Clean old entries (> 1 hour)
+            self.alert_memory = {k: v for k, v in self.alert_memory.items() if now_ts - v < 3600}
+            
+            if symbol in self.alert_memory:
+                last_time = self.alert_memory[symbol]
+                mins_ago = int((now_ts - last_time) / 60)
+                logger.info(f"🔇 Dedup: Suppressing duplicate alert for {symbol} (sent {mins_ago}m ago)")
+                return False
+                
+            # Always record to memory (including UNKNOWN to prevent local cycle spam)
+            self.alert_memory[symbol] = now_ts
+
+        # ── ASYNC SIGNAL DISPATCH ────────────────────────────────────────
+        is_big = analysis.get("is_big_ticket", False)
+        is_sme = analysis.get("is_sme", item.get("is_sme", False))
+        is_time_critical = analysis.get("time_critical", False)
+
+        dispatch_thread = threading.Thread(
+            target=self.bot.send_signal,
+            args=(item, analysis),
+            daemon=True
+        )
+        dispatch_thread.start()
+
+        self.db.mark_analysis_complete(
+            news_id, score, analysis.get("sentiment", "Neutral"),
+            trigger=analysis.get("trigger"),
+            perspective=analysis.get("sector"), alerted=True
+        )
+        self.db.mark_alert_sent(news_id)
+        
+        logger.info(f"🔥 ALERT DISPATCHED: {symbol} | Score: {score}/10 | {analysis.get('sentiment')} | {'🏦 SME' if is_sme else ''} {'🔥 BIG' if is_big else ''}")
+        return True
+
+    def safe_run_cycle(self):
+        """v1.3.3: Crash-protected wrapper with Automated Daily Backup."""
+        try:
+            # v1.3.3: Auto-Backup check before each cycle
+            if self.db.needs_backup():
+                self.db.backup()
+                
+            self.run_cycle()
+        except Exception as e:
+            logger.error(f"Cycle failure: {e}", exc_info=True)
+
+
 def main():
+    # v1.3.3: Graceful Shutdown Handlers
+    def shutdown_signal_handler(sig, frame):
+        logger.info(f"🚨 Received shutdown signal ({sig}). Finalizing system...")
+        system.db.conn.close()
+        logger.info("✅ Database flushed and closed. Goodbye!")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown_signal_handler)
+    signal.signal(signal.SIGTERM, shutdown_signal_handler)
+
     try:
         check_single_instance()
         system = MarketIntelligenceSystem()
-        
-        # 🟢 Start Admin Dashboard Bot (v8.0)
+
+        # Start Admin Dashboard Bot (parallel thread)
         try:
             from admin_bot import AdminPanel
             admin_p = AdminPanel()
-            import threading
             admin_thread = threading.Thread(target=admin_p.run, daemon=True)
             admin_thread.start()
-            logger.info("Admin Dashboard Bot started (Parallel Thread).")
+            logger.info("✅ Admin Dashboard Bot started.")
         except Exception as e:
             logger.error(f"Failed to start Admin Bot: {e}")
 
+        # Start Watchdog
+        system.watchdog.start()
+
+        # Start Scheduler
         from nse_monitor.scheduler import MarketScheduler
         scheduler = MarketScheduler(system)
-        system.run_cycle()
+
+        # Run first cycle immediately on startup
+        logger.info("🚀 Running initial intelligence cycle on startup...")
+        system.safe_run_cycle()
+
+        # Hand off to scheduler (blocking)
         scheduler.start()
-    except KeyboardInterrupt:
-        logger.info("User stopped.")
+
     except Exception as e:
-        logger.critical(f"FATAL: {e}", exc_info=True)
+        logger.critical(f"🔥 FATAL Boot Error: {e}", exc_info=True)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
-
