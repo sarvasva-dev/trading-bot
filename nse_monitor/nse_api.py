@@ -43,7 +43,9 @@ class NSEClient:
         """Warms up the session with a fresh User-Agent and optionally a Proxy."""
         try:
             ua = random.choice(USER_AGENTS)
-            logger.info("📡 Connecting to NSE Server...")
+            # v1.3.8: Direct Mode (Bypassing Proxies for stability)
+            self.current_proxy = None
+            logger.info("📡 Connecting to NSE Server (Direct Mode)...")
             
             # Reset headers with new UA
             current_headers = HEADERS.copy()
@@ -51,18 +53,15 @@ class NSEClient:
             self.session.headers.clear()
             self.session.headers.update(current_headers)
             
-            # v1.1 - Retrieve a fresh proxy
-            self.current_proxy = self.proxy_mgr.get_proxy()
-            if self.current_proxy:
-                logger.info(f"Using Proxy: {self.current_proxy['http']}")
+            # self.current_proxy = self.proxy_mgr.get_proxy() # Bypassed
             
             # 1. Visit Home Page (Crucial for baseline cookies)
-            self.session.get(NSE_BASE_URL, proxies=self.current_proxy, timeout=30)
+            self.session.get(NSE_BASE_URL, proxies=None, timeout=30)
             time.sleep(random.uniform(1, 3))
             
             # 2. Visit Circulars Landing Page (Stabilizes session)
             self.session.get(f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements", 
-                             proxies=self.current_proxy, timeout=30)
+                             proxies=None, timeout=30)
             logger.info("✅ NSE Connection: Secured & Stable.")
             self.is_connected = True
         except Exception as e:
