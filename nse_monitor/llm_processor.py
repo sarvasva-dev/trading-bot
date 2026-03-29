@@ -5,10 +5,6 @@ import time
 import os
 import re
 try:
-    from sarvamai import SarvamAI
-except ImportError:
-    SarvamAI = None
-try:
     from nse_monitor.config import SARVAM_API_KEY
 except ImportError:
     SARVAM_API_KEY = None
@@ -180,24 +176,15 @@ OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE. NO MARKDOWN.
 class LLMProcessor:
     def __init__(self):
         self.sarvam_key = SARVAM_API_KEY
-        self.sarvam_client = None
-
-        if not SarvamAI:
-            logger.error("SarvamAI SDK not installed. Please install 'sarvamai'.")
-            return
 
         if self.sarvam_key:
-            try:
-                self.sarvam_client = SarvamAI(api_subscription_key=self.sarvam_key)
-                logger.info("✅ AI Engine (Sarvam): Ready — 22-Rule Mode Active")
-            except Exception as e:
-                logger.error(f"Sarvam Init Error: {e}")
+            logger.info("✅ AI Engine (Sarvam HTTP Core): Ready — 22-Rule Mode Active")
         else:
             logger.error("SARVAM_API_KEY is missing in .env")
 
     def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
         """Analyzes a single event using the full 22-Rule Institutional Engine."""
-        if not self.sarvam_client:
+        if not self.sarvam_key:
             return None
 
         # Build consolidated context
@@ -257,24 +244,29 @@ class LLMProcessor:
             "temperature": 0.1
         }
         
-        try:
-            # v1.4.2: Direct API call for stability
-            logger.info("📡 Dispatching Institutional Prompt to Sarvam AI Core...")
-            r = requests.post(url, headers=headers, json=payload, timeout=60)
-            r.raise_for_status()
-            data = r.json()
-            
-            content_raw = data['choices'][0]['message']['content']
+        for attempt in range(3):
+            try:
+                # v1.4.2: Direct API call for stability
+                logger.info(f"📡 Dispatching Institutional Prompt to Sarvam AI Core (Attempt {attempt + 1}/3)...")
+                r = requests.post(url, headers=headers, json=payload, timeout=60)
+                r.raise_for_status()
+                data = r.json()
+                
+                content_raw = data['choices'][0]['message']['content']
 
-            if not content_raw:
-                logger.warning("Sarvam returned empty response.")
-                return None
+                if not content_raw:
+                    logger.warning("Sarvam returned empty response.")
+                    return None
 
-            return self._robust_json_parse(content_raw)
+                return self._robust_json_parse(content_raw)
 
-        except Exception as e:
-            logger.error(f"Sarvam AI failed: {e}", exc_info=True)
-            return None
+            except Exception as e:
+                logger.error(f"Sarvam AI attempt {attempt + 1} failed: {e}", exc_info=False)
+                if attempt < 2:
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    return None
 
     def _robust_json_parse(self, raw_text):
         """Extracts and repairs JSON from LLM output."""
@@ -349,7 +341,7 @@ class LLMProcessor:
 
     def summarize_morning_batch(self, analyzed_items):
         """Creates an executive summary of all off-market news for the 08:30 AM Morning Report."""
-        if not self.sarvam_client or not analyzed_items:
+        if not self.sarvam_key or not analyzed_items:
             return {}
 
         news_list_str = ""

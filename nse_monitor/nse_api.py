@@ -83,7 +83,7 @@ class NSEClient:
             params = {
                 "index": "equities",
                 "from_date": from_date,
-                "to_date": time.strftime("%d-%m-%Y")
+                "to_date": now_ist.strftime("%d-%m-%Y")
             }
             logger.info(f"Fetching announcements from {from_date} (Attempting to hit API)...")
             response = self.session.get(NSE_API_URL, params=params, proxies=self.current_proxy, timeout=15)

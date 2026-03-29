@@ -42,11 +42,12 @@ class TelegramBot:
             logger.warning(f"Telegram Bot: Failed to sync offset on boot: {e}")
 
     def set_my_commands(self):
-        """Sets the blue menu buttons in the Telegram UI (Rule #24)."""
+        """Sets the unified blue menu buttons in the Telegram UI."""
         if not self.token: return
         commands = [
             {"command": "start", "description": "🚀 Activate Engine & Menu"},
             {"command": "plan", "description": "💎 My Subscription & Expiry"},
+            {"command": "hisab", "description": "📝 View Billing Logs (Hisab)"},
             {"command": "subscribe", "description": "🛒 Recharge / Upgrade"},
             {"command": "bulk", "description": "📈 Today's Big Deals"},
             {"command": "upcoming", "description": "🗓️ Corporate Calendar"},
@@ -95,29 +96,18 @@ class TelegramBot:
             logger.error(f"Error saving dynamic IDs: {e}")
 
     def register_menu_commands(self):
-        """Registers the bot commands in the Telegram menu."""
-        url = f"{self.base_url}/setMyCommands"
-        commands = [
-            {"command": "start", "description": "Activate Engine & Legal Disclaimer"},
-            {"command": "subscribe", "description": "Get Premium Access (Razorpay Link)"},
-            {"command": "me", "description": "My ID & Credits Balance"},
-            {"command": "history", "description": "View My Payment History"},
-            {"command": "hisab", "description": "📝 View Billing Logs (Hisab)"},
-            {"command": "support", "description": "Contact Human Support"}
-        ]
-        try:
-            requests.post(url, json={"commands": commands}, timeout=10)
-        except Exception as e:
-            logger.error(f"Failed to register commands: {e}")
+        """Alias for set_my_commands to prevent overwriting."""
+        self.set_my_commands()
 
     def handle_updates(self):
-        """Checks for new messages and handles commands."""
+        """Checks for new messages and handles commands via Long Polling."""
         if not self.token: return
         
         try:
             url = f"{self.base_url}/getUpdates"
-            params = {"offset": self.last_update_id + 1, "timeout": 1}
-            r = requests.get(url, params=params, timeout=5)
+            # Fix 2: Proper Long-Polling with 20s timeout instead of CPU-burning 1s loops
+            params = {"offset": self.last_update_id + 1, "timeout": 20}
+            r = requests.get(url, params=params, timeout=25)
             data = r.json()
             
             if data.get("ok") and data.get("result"):
@@ -214,6 +204,9 @@ class TelegramBot:
                         # Answer callback
                         requests.post(f"{self.base_url}/answerCallbackQuery", json={"callback_query_id": cb_id}, timeout=5)
 
+        except requests.exceptions.Timeout:
+            # Expected during long polling, gracefully continue
+            pass
         except Exception as e:
             logger.error(f"Failed to handle Telegram updates: {e}")
 

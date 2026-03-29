@@ -149,23 +149,25 @@ class MarketIntelligenceSystem:
             return False
         return 9 <= now.hour < 16
 
-    def daily_maintenance(self):
-        """
-        v1.0: Runs at midnight IST.
-        - Deducts 1 credit ONLY on real trading days (respects NSE holidays).
-        - Sends expiry reminders to exhausted users.
-        - Runs DB maintenance and backup.
-        """
+    def eod_billing(self):
+        """Runs at 16:00 IST to deduct 1 market day post-market."""
         now = datetime.now(self.ist)
-
-        # v1.0: Holiday-aware credit deduction
+        from nse_monitor.trading_calendar import TradingCalendar
         if TradingCalendar.is_trading_day(now):
-            logger.info(f"📅 Trading Day ({now.strftime('%d %b %Y')}): Decrementing user credits...")
+            logger.info(f"📅 Post-Market Ledger EOD ({now.strftime('%d %b %Y')}): Decrementing user credits...")
             self.db.decrement_working_days()
         else:
             holiday_name = TradingCalendar.get_holiday_name(now)
             reason = f"NSE Holiday ({holiday_name})" if holiday_name else "Weekend"
-            logger.info(f"🗓️ {reason}: Skipping credit deduction.")
+            logger.info(f"🗓️ {reason}: Skipping Post-Market credit deduction.")
+
+    def daily_maintenance(self):
+        """
+        v1.0: Runs at midnight IST.
+        - Sends expiry reminders to exhausted users.
+        - Runs DB maintenance and backup.
+        """
+        now = datetime.now(self.ist)
 
         # Send expiry reminders
         expired_users = self.db.get_expired_users()
@@ -421,27 +423,27 @@ class MarketIntelligenceSystem:
             # Always record to memory (including UNKNOWN to prevent local cycle spam)
             self.alert_memory[symbol] = now_ts
 
-        # ── ASYNC SIGNAL DISPATCH ────────────────────────────────────────
+        # ── SIGNAL DISPATCH (Synchronous inside ThreadPool Worker) ───────
         is_big = analysis.get("is_big_ticket", False)
         is_sme = analysis.get("is_sme", item.get("is_sme", False))
         is_time_critical = analysis.get("time_critical", False)
-
-        dispatch_thread = threading.Thread(
-            target=self.bot.send_signal,
-            args=(item, analysis),
-            daemon=True
-        )
-        dispatch_thread.start()
+        
+        # ── OFF-MARKET SUPPRESSION ───────────────────────────────────────
+        should_send = market_on or score >= 9
+        
+        if should_send:
+            self.bot.send_signal(item, analysis)
+            self.db.mark_alert_sent(news_id)
+            logger.info(f"🔥 ALERT DISPATCHED: {symbol} | Score: {score}/10 | {analysis.get('sentiment')} | {'🏦 SME' if is_sme else ''} {'🔥 BIG' if is_big else ''}")
+        else:
+            logger.info(f"🌙 OFF-MARKET: Suppressing broadcast for {symbol} (Score: {score}/10). Saved for morning report.")
 
         self.db.mark_analysis_complete(
             news_id, score, analysis.get("sentiment", "Neutral"),
             trigger=analysis.get("trigger"),
-            perspective=analysis.get("sector"), alerted=True
+            perspective=analysis.get("sector"), alerted=should_send
         )
-        self.db.mark_alert_sent(news_id)
-        
-        logger.info(f"🔥 ALERT DISPATCHED: {symbol} | Score: {score}/10 | {analysis.get('sentiment')} | {'🏦 SME' if is_sme else ''} {'🔥 BIG' if is_big else ''}")
-        return True
+        return should_send
 
     def safe_run_cycle(self):
         """v1.3.3: Crash-protected wrapper with Automated Daily Backup."""

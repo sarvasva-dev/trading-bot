@@ -58,13 +58,30 @@ class MarketScheduler:
             id='weekly_memory_flush'
         )
 
-        # 3. Daily Maintenance (00:01 IST) — Billing & DB Cleanup
+        # 2.5 Auto-Verify Pending Razorpay Links (Every 5 minutes)
+        self.scheduler.add_job(
+            self.system.check_pending_payments,
+            'interval',
+            minutes=5,
+            id='payment_polling'
+        )
+
+        # 3. Daily Maintenance (00:01 IST) — DB Cleanup & Reminders
         self.scheduler.add_job(
             self.system.daily_maintenance,
             'cron',
             hour=0,
             minute=1,
             id='daily_system_maintenance'
+        )
+        
+        # 4. End of Day Ledger Deduction (16:00 IST) — Post Market
+        self.scheduler.add_job(
+            self.system.eod_billing,
+            'cron',
+            hour=16,
+            minute=0,
+            id='eod_billing_deduction'
         )
 
         logger.info("Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.")
