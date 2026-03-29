@@ -47,6 +47,11 @@ class PDFProcessor:
             return local_path
 
         for attempt in range(retries):
+            # v1.4.1: Anti-Block Jitter (Round Robin timing)
+            # Even for the first attempt, we wait a bit to decouple from the trigger
+            if attempt == 0:
+                time.sleep(random.uniform(3, 7))
+            
             proxy = self.proxy_mgr.get_proxy()
             try:
                 # Rotate User-Agent on each attempt
@@ -56,8 +61,9 @@ class PDFProcessor:
                 logger.info(f"Downloading PDF (Attempt {attempt+1}/{retries}): {pdf_url}")
                 if proxy: logger.debug(f"Using Proxy for PDF: {proxy['http']}")
                 
+                # v1.4.2: Direct Mode (Bypassing Proxies for stability)
                 # Use a fresh landing page visit to stabilize session if needed
-                response = self.session.get(pdf_url, proxies=proxy, timeout=45, stream=True)
+                response = self.session.get(pdf_url, proxies=None, timeout=45, stream=True)
                 response.raise_for_status()
 
                 with open(local_path, "wb") as f:

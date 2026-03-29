@@ -232,23 +232,39 @@ class LLMProcessor:
         return self._run_prompt(prompt)
 
     def _run_prompt(self, prompt):
+        """v1.4.2: Robust direct-request implementation (Bypassing SDK attribute errors)."""
+        if not self.sarvam_key:
+            return None
+            
+        url = "https://api.sarvam.ai/chat/completions"
+        headers = {
+            "api-subscription-key": self.sarvam_key,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "sarvam-105b-32k",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior quantitative analyst at an Indian hedge fund. "
+                        "You MUST return ONLY valid JSON. No markdown, no prose, no explanation. "
+                        "Apply all 22 institutional rules rigorously."
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1
+        }
+        
         try:
-            # v2.0: Aligned with standard Sarvam/OpenAI SDK pattern (completions.create)
-            response = self.sarvam_client.chat.completions.create(
-                model="sarvam-105b-32k",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a senior quantitative analyst at an Indian hedge fund. "
-                            "You MUST return ONLY valid JSON. No markdown, no prose, no explanation. "
-                            "Apply all 22 institutional rules rigorously."
-                        )
-                    },
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            content_raw = response.choices[0].message.content
+            # v1.4.2: Direct API call for stability
+            logger.info("📡 Dispatching Institutional Prompt to Sarvam AI Core...")
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            
+            content_raw = data['choices'][0]['message']['content']
 
             if not content_raw:
                 logger.warning("Sarvam returned empty response.")
