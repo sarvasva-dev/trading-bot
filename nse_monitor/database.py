@@ -157,6 +157,15 @@ class Database:
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_backup', '0')")
             
 
+            # v1.3.2: Auto-Migration for Zero-Loss Queue (Self-Healing)
+            # Checks if processing_status exists, if not, adds it to legacy databases.
+            cursor = self.conn.cursor()
+            cursor.execute("PRAGMA table_info(news_items)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'processing_status' not in columns:
+                logger.warning("🔄 Upgrading Database: Adding 'processing_status' column to news_items...")
+                self.conn.execute("ALTER TABLE news_items ADD COLUMN processing_status INTEGER DEFAULT 0")
+
             # v1.0 Performance Indexes
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news_items(timestamp)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_cluster_id ON news_items(cluster_id)")
