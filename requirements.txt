@@ -13,4 +13,4 @@ pytesseract>=0.3.10
 Pillow>=10.0.0
 
 # Integration
-razorpay>=3.4.0
+razorpay>=2.0.1
