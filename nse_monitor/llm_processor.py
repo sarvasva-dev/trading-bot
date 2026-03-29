@@ -236,13 +236,13 @@ class LLMProcessor:
         if not self.sarvam_key:
             return None
             
-        url = "https://api.sarvam.ai/chat/completions"
+        url = "https://api.sarvam.ai/v1/chat/completions"
         headers = {
             "api-subscription-key": self.sarvam_key,
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "sarvam-105b-32k",
+            "model": "sarvam-30b",
             "messages": [
                 {
                     "role": "system",
