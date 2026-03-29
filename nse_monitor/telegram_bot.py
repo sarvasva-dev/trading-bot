@@ -41,9 +41,11 @@ class TelegramBot:
         except Exception as e:
             logger.warning(f"Telegram Bot: Failed to sync offset on boot: {e}")
 
+    def set_my_commands(self):
         """Sets the blue menu buttons in the Telegram UI (Rule #24)."""
         if not self.token: return
         commands = [
+            {"command": "start", "description": "🚀 Activate Engine & Menu"},
             {"command": "plan", "description": "💎 My Subscription & Expiry"},
             {"command": "subscribe", "description": "🛒 Recharge / Upgrade"},
             {"command": "bulk", "description": "📈 Today's Big Deals"},
