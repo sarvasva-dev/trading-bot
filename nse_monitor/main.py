@@ -249,6 +249,12 @@ class MarketIntelligenceSystem:
         raw_items = []
         for source in self.sources:
             try:
+                # v1.3.6: Skip NSE sources if not connected (Prevents cycle crashes)
+                source_name = getattr(source, 'NAME', 'Unknown')
+                if source_name in ("NSE", "NSE_SME") and not self.nse_client.is_connected:
+                    logger.warning(f"⚠️ Source [{source_name}] skipped: NSE Client not connected yet.")
+                    continue
+                    
                 items = source.fetch()
                 if items:
                     tz = pytz.timezone("Asia/Kolkata")

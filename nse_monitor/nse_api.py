@@ -31,7 +31,12 @@ class NSEClient:
         self.proxy_mgr = ProxyManager()
         self.current_proxy = None
         self.on_403 = on_403 # Callback for admin alerts (v1.3)
-        self._init_session()
+        self.is_connected = False
+        
+        try:
+            self._init_session()
+        except Exception:
+            logger.error("⚠️ Initial NSE Connection Failed. Admin Panel will remain active. System will retry in next cycle.")
 
     @retry_with_backoff(retries=3, backoff_in_seconds=2)
     def _init_session(self):
@@ -59,11 +64,13 @@ class NSEClient:
             self.session.get(f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements", 
                              proxies=self.current_proxy, timeout=30)
             logger.info("✅ NSE Connection: Secured & Stable.")
+            self.is_connected = True
         except Exception as e:
+            self.is_connected = False
             logger.warning(f"❌ NSE Connection Failed with proxy {self.current_proxy}. Retrying...")
             if self.current_proxy:
                 self.proxy_mgr.remove_dead_proxy(self.current_proxy)
-            raise
+            raise e
 
     @retry_with_backoff(retries=3, backoff_in_seconds=4)
     def get_announcements(self):
