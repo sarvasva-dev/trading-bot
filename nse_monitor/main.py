@@ -56,9 +56,6 @@ from nse_monitor.trading_calendar import TradingCalendar
 
 import logging.handlers
 
-# ── Global Uptime Tracker ───────────────────────────────────────────────────
-START_TIME = time.time()
-
 # ── Logging Setup ─────────────────────────────────────────────────────────────
 def ist_time(*args):
     return datetime.now(pytz.timezone('Asia/Kolkata')).timetuple()
@@ -471,17 +468,19 @@ def main():
 
     try:
         check_single_instance()
-        system = MarketIntelligenceSystem()
-
-        # Start Admin Dashboard Bot (parallel thread)
+        
+        # v1.3.7: Start Admin Dashboard FIRST (Ensures immediate responsiveness)
         try:
             from admin_bot import AdminPanel
             admin_p = AdminPanel()
             admin_thread = threading.Thread(target=admin_p.run, daemon=True)
             admin_thread.start()
-            logger.info("✅ Admin Dashboard Bot started.")
+            logger.info("✅ Admin Dashboard Bot started (Priority).")
         except Exception as e:
             logger.error(f"Failed to start Admin Bot: {e}")
+
+        # Now start the Heavy Intelligence Engine
+        system = MarketIntelligenceSystem()
 
         # Start Watchdog
         system.watchdog.start()

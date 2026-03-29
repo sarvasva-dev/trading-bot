@@ -1,5 +1,9 @@
+import time
 import os
 from dotenv import load_dotenv
+
+# v1.3.7: Global Uptime Tracker (Shared)
+START_TIME = time.time()
 
 # Storage Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

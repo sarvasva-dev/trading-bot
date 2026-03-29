@@ -512,7 +512,7 @@ class AdminPanel:
         
         # 1. Uptime calculation
         try:
-            from nse_monitor.main import START_TIME
+            from nse_monitor.config import START_TIME
             uptime_sec = time.time() - START_TIME
         except:
             uptime_sec = 0
