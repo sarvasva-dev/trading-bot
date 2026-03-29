@@ -2,6 +2,7 @@ import sqlite3
 import os
 import logging
 import threading
+import pytz
 from datetime import datetime
 from nse_monitor.config import DB_PATH
 
