@@ -537,9 +537,13 @@ class AdminPanel:
         last_bk = self.db.get_config("last_backup", "Never")
         if last_bk != "Never":
             try:
-                last_bk = datetime.fromtimestamp(float(last_bk)).strftime("%d %b, %H:%M")
+                # v1.4.6: Improved backup timestamp parsing
+                last_bk = datetime.fromtimestamp(float(last_bk), tz=pytz.timezone('Asia/Kolkata')).strftime("%d %b, %H:%M")
             except: pass
             
+        # v1.4.6: Set Report Time to IST for better UX
+        ist_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        
         msg = (
             f"🛰️ <b>{BOT_NAME} — INDUSTRIAL PULSE</b>\n"
             f"────────────────────────\n"
@@ -550,7 +554,7 @@ class AdminPanel:
             f"🛡️ <b>Last Backup:</b> <code>{last_bk}</code>\n"
             f"────────────────────────\n"
             f"✅ <b>Status:</b> INSTITUTIONAL PRO\n"
-            f"📍 <i>Server Time: {datetime.now().strftime('%H:%M:%S')}</i>"
+            f"📍 <i>IST Time: {ist_now.strftime('%H:%M:%S')}</i>"
         )
         
         self._send(chat_id, msg)
