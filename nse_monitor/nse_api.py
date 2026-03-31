@@ -1,158 +1,189 @@
-import requests
-import time
+import aiohttp
+import asyncio
 import logging
 import random
+import pytz
 from datetime import datetime, timedelta
 from nse_monitor.config import HEADERS, NSE_BASE_URL, NSE_API_URL, USER_AGENTS
-from nse_monitor.proxy_manager import ProxyManager
+# from nse_monitor.proxy_manager import ProxyManager # Keeping imports for potential future use
 
 logger = logging.getLogger(__name__)
 
 def retry_with_backoff(retries=3, backoff_in_seconds=1):
     def decorator(func):
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             x = 0
             while x < retries:
                 try:
-                    return func(*args, **kwargs)
+                    return await func(*args, **kwargs)
                 except Exception as e:
                     if x == retries - 1:
                         raise e
                     sleep = (backoff_in_seconds * 2 ** x + random.uniform(0.5, 1.5))
                     logger.warning(f"Retrying in {sleep:.2f} seconds after error: {e}")
-                    time.sleep(sleep)
+                    await asyncio.sleep(sleep)
                     x += 1
         return wrapper
     return decorator
 
 class NSEClient:
     def __init__(self, on_403=None):
-        self.session = requests.Session()
-        self.proxy_mgr = ProxyManager()
-        self.current_proxy = None
-        self.on_403 = on_403 # Callback for admin alerts (v1.3)
+        self.session = None  # Created lazily in async context
+        # self.proxy_mgr = ProxyManager() # Bypassed
+        self.current_proxy = None # Direct Mode (per user request)
+        self.on_403 = on_403
         self.is_connected = False
-        
-        try:
-            self._init_session()
-        except Exception:
-            logger.error("⚠️ Initial NSE Connection Failed. Admin Panel will remain active. System will retry in next cycle.")
+        self.lock = asyncio.Lock()
+
+    async def ensure_session(self):
+        """Ensures an aiohttp session is active and warmed up."""
+        if self.session is None or self.session.closed:
+            async with self.lock:
+                if self.session is None or self.session.closed:
+                    self.session = aiohttp.ClientSession(headers=HEADERS)
+                    try:
+                        await self._init_session()
+                    except Exception as e:
+                        logger.error(f"⚠️ Initial NSE Connection Failed: {e}")
 
     @retry_with_backoff(retries=3, backoff_in_seconds=2)
-    def _init_session(self):
-        """Warms up the session with a fresh User-Agent and optionally a Proxy."""
+    async def _init_session(self):
+        """Warms up the session with fresh cookies and identity rotation."""
+        ua = random.choice(USER_AGENTS)
+        logger.info("📡 Connecting to NSE Server (Direct Async Mode)...")
+        
+        # Reset headers with new UA
+        headers = HEADERS.copy()
+        headers["User-Agent"] = ua
+        self.session._default_headers.update(headers)
+        
         try:
-            ua = random.choice(USER_AGENTS)
-            # v1.3.8: Direct Mode (Bypassing Proxies for stability)
-            self.current_proxy = None
-            logger.info("📡 Connecting to NSE Server (Direct Mode)...")
+            # 1. Visit Home Page (Baseline cookies)
+            async with self.session.get(NSE_BASE_URL, timeout=30) as resp:
+                await resp.text()
+            await asyncio.sleep(random.uniform(1, 3))
             
-            # Reset headers with new UA
-            current_headers = HEADERS.copy()
-            current_headers["User-Agent"] = ua
-            self.session.headers.clear()
-            self.session.headers.update(current_headers)
+            # 2. Visit Corporate Filings Page
+            url = f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements"
+            async with self.session.get(url, timeout=30) as resp:
+                await resp.text()
             
-            # self.current_proxy = self.proxy_mgr.get_proxy() # Bypassed
-            
-            # 1. Visit Home Page (Crucial for baseline cookies)
-            self.session.get(NSE_BASE_URL, proxies=None, timeout=30)
-            time.sleep(random.uniform(1, 3))
-            
-            # 2. Visit Circulars Landing Page (Stabilizes session)
-            self.session.get(f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements", 
-                             proxies=None, timeout=30)
-            logger.info("✅ NSE Connection: Secured & Stable.")
+            logger.info("✅ NSE Connection: Secured & Stable (Async).")
             self.is_connected = True
         except Exception as e:
             self.is_connected = False
-            logger.warning(f"❌ NSE Connection Failed with proxy {self.current_proxy}. Retrying...")
-            if self.current_proxy:
-                self.proxy_mgr.remove_dead_proxy(self.current_proxy)
-            raise e
-
-    @retry_with_backoff(retries=3, backoff_in_seconds=4)
-    def get_announcements(self):
-        """Fetches latest announcements with identity rotation on 403."""
-        try:
-            # RULE #3: 1-Day Lookback using IST for precision (v13.0)
-            import pytz
-            ist = pytz.timezone("Asia/Kolkata")
-            now_ist = datetime.now(ist)
-            from_date = (now_ist - timedelta(days=1)).strftime("%d-%m-%Y")
-            params = {
-                "index": "equities",
-                "from_date": from_date,
-                "to_date": now_ist.strftime("%d-%m-%Y")
-            }
-            logger.info(f"Fetching announcements from {from_date} (Attempting to hit API)...")
-            response = self.session.get(NSE_API_URL, params=params, proxies=self.current_proxy, timeout=15)
-            
-            if response.status_code in [401, 403]:
-                logger.warning(f"⚠️ NSE Access Denied (403). Identity Pressure Detected.")
-                # Notify Admin if callback provided
-                if self.on_403:
-                    try:
-                        self.on_403(f"🚨 <b>NSE IP PRESSURE:</b> Received 403 on API. Using proxy: {self.current_proxy['http'] if self.current_proxy else 'Direct'}")
-                    except: pass
-                
-                if self.current_proxy:
-                     self.proxy_mgr.remove_dead_proxy(self.current_proxy)
-                self._init_session() # Rotate UA and proxy
-                response = self.session.get(NSE_API_URL, params=params, proxies=self.current_proxy, timeout=15)
-
-            response.raise_for_status()
-            data = response.json()
-            return data if isinstance(data, list) else data.get('data', [])
-        except Exception as e:
-            logger.error(f"Error fetching announcements: {e}")
+            logger.warning(f"❌ NSE Connection Failed. Error: {e}")
             raise
 
-    def get_json(self, url, params=None, referer=None, warmup=None):
-        """Generic robust JSON fetcher for any NSE API endpoint."""
-        # ERROR FIX v1.1: self.headers didn't exist, must be self.session.headers
-        headers = dict(self.session.headers)
+    @retry_with_backoff(retries=3, backoff_in_seconds=4)
+    async def get_announcements(self, index="equities"):
+        """Fetches latest announcements with identity rotation on 403."""
+        await self.ensure_session()
+        
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        from_date = (now_ist - timedelta(days=1)).strftime("%d-%m-%Y")
+        
+        params = {
+            "index": index,
+            "from_date": from_date,
+            "to_date": now_ist.strftime("%d-%m-%Y")
+        }
+        
+        logger.info(f"Fetching {index} announcements from {from_date}...")
+        
+        async with self.session.get(NSE_API_URL, params=params, timeout=15) as response:
+            if response.status in [401, 403]:
+                logger.warning(f"⚠️ NSE Access Denied (403). Identity Pressure Detected.")
+                if self.on_403:
+                    try: 
+                        msg = f"🚨 <b>NSE IP PRESSURE:</b> 403 on {index}."
+                        if asyncio.iscoroutinefunction(self.on_403):
+                            await self.on_403(msg)
+                        else:
+                            self.on_403(msg)
+                    except: pass
+                
+                await self._init_session()
+                # Retry once after re-init
+                async with self.session.get(NSE_API_URL, params=params, timeout=15) as retry_resp:
+                    retry_resp.raise_for_status()
+                    data = await retry_resp.json()
+            else:
+                response.raise_for_status()
+                data = await response.json()
+            
+            return data if isinstance(data, list) else data.get('data', [])
+
+    async def get_json(self, url, params=None, referer=None, warmup=None):
+        """Generic robust async JSON fetcher."""
+        await self.ensure_session()
+        
+        current_headers = {}
         if referer:
-            headers["Referer"] = referer
+            current_headers["Referer"] = referer
             
         try:
-            # 1. Warm up if needed (Visit the parent page first)
             if warmup:
-                self.session.get(warmup, headers=headers, proxies=self.current_proxy, timeout=10)
+                async with self.session.get(warmup, headers=current_headers, timeout=10) as warm_resp:
+                    await warm_resp.text()
                 
-            # 2. Extract JSON
-            response = self.session.get(url, params=params, headers=headers, proxies=self.current_proxy, timeout=15)
-            
-            # 3. Handle 403/401 with identity rotation
-            if response.status_code in [401, 403]:
-                logger.warning(f"Access denied (403) for {url}. Rotating identity and proxy...")
-                if self.current_proxy:
-                     self.proxy_mgr.remove_dead_proxy(self.current_proxy)
-                self._init_session()
-                # Use updated headers
-                headers = dict(self.session.headers)
-                if referer: headers["Referer"] = referer
-                
-                if warmup: 
-                    self.session.get(warmup, headers=headers, proxies=self.current_proxy, timeout=10)
-                response = self.session.get(url, params=params, headers=headers, proxies=self.current_proxy, timeout=15)
-                
-            if response.status_code != 200:
-                logger.error(f"NSE API Error {response.status_code} for {url}")
-                return None
-                
-            if not response.text.strip():
-                logger.warning(f"NSE API returned empty response for {url}")
-                # Try one more time with a fresh session
-                if self.current_proxy:
-                     self.proxy_mgr.remove_dead_proxy(self.current_proxy)
-                self._init_session()
-                headers = dict(self.session.headers)
-                if referer: headers["Referer"] = referer
-                response = self.session.get(url, params=params, headers=headers, proxies=self.current_proxy, timeout=15)
-                if not response.text.strip(): return None
-                
-            return response.json()
+            async with self.session.get(url, params=params, headers=current_headers, timeout=15) as response:
+                if response.status in [401, 403]:
+                    logger.warning(f"Access denied (403) for {url}. Rotating identity...")
+                    await self._init_session()
+                    # Retry with new identity
+                    if warmup:
+                        async with self.session.get(warmup, headers=current_headers, timeout=10) as warm_retry:
+                            await warm_retry.text()
+                    async with self.session.get(url, params=params, headers=current_headers, timeout=15) as retry_resp:
+                        if retry_resp.status != 200: return None
+                        return await retry_resp.json()
+                        
+                if response.status != 200:
+                    logger.error(f"NSE API Error {response.status} for {url}")
+                    return None
+                    
+                text = await response.text()
+                if not text.strip():
+                    return None
+                    
+                return await response.json()
         except Exception as e:
             logger.error(f"NSE API Request Failed ({url}): {e}")
             return None
+
+    @retry_with_backoff(retries=2, backoff_in_seconds=5)
+    async def get_historical_data(self, symbol, days=12):
+        """v4.0: Fetches historical Price-Volume-Delivery data (Security-wise)."""
+        await self.ensure_session()
+        
+        ist = pytz.timezone("Asia/Kolkata")
+        to_date = datetime.now(ist).strftime("%d-%m-%Y")
+        from_date = (datetime.now(ist) - timedelta(days=days)).strftime("%d-%m-%Y")
+        
+        # v3.0 Discovered endpoint for historical delivery position
+        url = "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
+        params = {
+            "from": from_date,
+            "to": to_date,
+            "symbol": symbol.upper(),
+            "type": "priceVolumeDeliverable",
+            "series": "ALL"
+        }
+        
+        # This endpoint requires a valid referer from the report page
+        referer = f"https://www.nseindia.com/report-detail/eq_security?symbol={symbol.upper()}"
+        
+        logger.info(f"📊 Fetching Smart Money Data for {symbol} ({from_date} to {to_date})")
+        
+        data = await self.get_json(url, params=params, referer=referer)
+        if not data or not isinstance(data, dict) or 'data' not in data:
+            return []
+            
+        return data['data']
+
+    async def close(self):
+        """Closes the underlying aiohttp session."""
+        if self.session and not self.session.closed:
+            await self.session.close()

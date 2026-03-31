@@ -170,6 +170,23 @@ class TradingCalendar:
         return current
 
     @staticmethod
+    def get_previous_trading_day(from_date=None):
+        """v4.2.1: Returns the previous valid trading day from a given date (IST)."""
+        if from_date is None:
+            import pytz
+            from datetime import datetime
+            tz = pytz.timezone("Asia/Kolkata")
+            from_date = datetime.now(tz).date()
+
+        if hasattr(from_date, 'date'):
+            from_date = from_date.date()
+
+        current = from_date - timedelta(days=1)
+        while not TradingCalendar.is_trading_day(current):
+            current -= timedelta(days=1)
+        return current
+
+    @staticmethod
     def sync_from_nse():
         """v1.3: Fetches the latest holiday list from NSE API and updates the local JSON."""
         import requests

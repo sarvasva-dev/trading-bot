@@ -1,5 +1,7 @@
-import logging
 import pytz
+import asyncio
+import os
+import logging
 from datetime import datetime
 from nse_monitor.sources.global_source import GlobalSource
 from nse_monitor.sources.bulk_deal_source import BulkDealSource
@@ -14,25 +16,41 @@ class ReportBuilder:
         self.global_source = GlobalSource()
         self.bulk_source = BulkDealSource()
 
-    def generate_morning_report(self):
-        """Generates and sends the morning report."""
-        try:
-            tz = pytz.timezone('Asia/Kolkata')
-            now = datetime.now(tz)
-            lookback = 66 if now.weekday() == 0 else 18
-            
-            report = self.build_pre_market_report(hours=lookback)
-            if len(report) > 50:
-                self.bot.send_report(report)
-        except Exception as e:
-            logger.error(f"Report Generation Failed: {e}")
-
-    def build_pre_market_report(self, hours=18):
-        """Unified v7.5 Morning Intelligence Report."""
-        all_news = self.db.get_recent_news(hours=hours)
-        global_intel = self.global_source.fetch_indices()
+    async def generate_morning_report(self):
+        """v4.0: Instrumented Generation with Observability (Async)."""
+        tz = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(tz)
+        lookback = 66 if now.weekday() == 0 else 18
         
-        ai_res = self.llm_processor.summarize_morning_batch(all_news) if all_news else {}
+        try:
+            report = await self.build_pre_market_report(hours=lookback)
+            if len(report) > 50:
+                await self.bot.send_report(report)
+                logger.info(f"✅ Morning Report Sent (Lookback: {lookback}h)")
+            else:
+                logger.warning(f"⚠️ Morning Report too short (len: {len(report)}). Skipping send.")
+        except Exception as e:
+            err_msg = f"❌ <b>Report Builder Failure</b>: {str(e)[:100]}"
+            logger.error(f"FATAL: Report Generation Failed: {e}", exc_info=True)
+            # v4.0: Alert admin on failure
+            try: await self.bot._send_raw(os.getenv("TELEGRAM_ADMIN_CHAT_ID"), err_msg)
+            except: pass
+
+    async def build_pre_market_report(self, hours=18):
+        """v4.0: Analyzed Context Only Mode (Async)."""
+        # Fetch only processed/analyzed high-impact items
+        all_news = self.db.get_recent_analyzed_news(hours=hours, min_score=1)
+        global_intel = await self.global_source.fetch_indices()
+        bulk_intel = await self.bulk_source.get_deals_for_report()
+        
+        # v2.0: AI Summarization using async LLM processor
+        ai_res = {}
+        llm_called = False
+        if all_news:
+            ai_res = await self.llm_processor.summarize_morning_batch(all_news)
+            llm_called = True
+        
+        logger.info(f"Report Context: {len(all_news)} items | LLM Called: {llm_called}")
 
         report = [f"🌅 <b>NSE PULSE: MORNING INTEL</b>"]
         report.append(f"────────────────────────")
@@ -41,30 +59,57 @@ class ReportBuilder:
         report.append(f"🌎 <b>GLOBAL SETUP</b>")
         report.append(f"• GIFT Nifty: {global_intel.get('GIFT Nifty', 'N/A')}")
         report.append(f"• Dow Jones: {global_intel.get('Dow Jones', 'N/A')}")
+        report.append(f"• Nasdaq: {global_intel.get('Nasdaq', 'N/A')}")
         
         # 2. Executive Summary
         report.append(f"\n🧠 <b>STRATEGIST VIEW: {ai_res.get('theme', 'Market Update')}</b>")
         report.append(f"<i>{ai_res.get('summary', 'No significant news detected.')}</i>")
         report.append(f"📊 <b>Sentiment:</b> {ai_res.get('sentiment', 'Neutral')}")
         
-        # 3. High Impact Signals
+        # 3. High Impact Signals (v4.0 Null-Safe Sort)
         report.append(f"\n🚨 <b>INSTITUTIONAL TRIGGERS</b>")
-        sorted_news = sorted(all_news, key=lambda x: x.get('impact_score', 0), reverse=True)[:5]
+        
+        # Filter out impact_score=0 as per Rule #3 policy
+        trigger_news = [n for n in all_news if int(n.get("impact_score") or 0) > 0]
+        sorted_news = sorted(trigger_news, key=lambda x: int(x.get('impact_score') or 0), reverse=True)[:5]
+        
         for idx, item in enumerate(sorted_news, 1):
             url = item.get('url', '#')
             if not url.startswith('http'): url = f"https://nsearchives.nseindia.com/corporate/{url}"
             report.append(f"<b>{idx}. {item['headline']}</b>")
             report.append(f"👉 <a href='{url}'>Reference Filing</a>")
 
-        # 4. Bulk Deals
-        report.append(f"\n📊 <b>RECENT BULK DEALS</b>")
-        report.append("<i>Coming soon from Moneycontrol stats...</i>")
+        # 4. Bulk & Block Deals (v4.2.1: Truthful Recap)
+        report.append(f"\n🔄 <b>BULK & BLOCK DEALS</b>")
         
+        from nse_monitor.config import KNOWN_INSTITUTIONS, BULK_REPORT_MIN_VAL_CR, BULK_MAX_ITEMS_REPORT
+        
+        deals_list = bulk_intel.get("deals", [])
+        is_stale = bulk_intel.get("is_stale", True)
+        recap_date = bulk_intel.get("recap_date", "N/A")
+        
+        if not is_stale and deals_list:
+            report.append(f"<i>Recap Session: {recap_date}</i>")
+            # Filter & Sort
+            eligible = [d for d in deals_list if d.get("val_cr", 0) >= BULK_REPORT_MIN_VAL_CR]
+            sorted_bulk = sorted(eligible, key=lambda x: (-x['val_cr'], x['symbol']))[:BULK_MAX_ITEMS_REPORT]
+            
+            if sorted_bulk:
+                for d in sorted_bulk:
+                    # v4.2.1: Hardened matching
+                    clean_name = " ".join(d['client_name'].upper().split())
+                    badge = "🏛 " if any(inst in clean_name for inst in KNOWN_INSTITUTIONS) else ""
+                    bs_icon = "🟢" if d['buy_sell'] == "BUY" else "🔴"
+                    report.append(f"• {badge}{d['symbol']}: {d['buy_sell']} {d['client_name']} | <b>₹{d['val_cr']:.1f} Cr</b> {bs_icon}")
+            else:
+                report.append(f"<i>No significant deals (>₹{BULK_REPORT_MIN_VAL_CR} Cr) detected.</i>")
+        else:
+            # Stale or Empty path
+            expected_session = bulk_intel.get("recap_date", "N/A")
+            report.append(f"<i>Session: {expected_session}</i>")
+            report.append(f"⚠️ <i>No fresh deals detected for this session.</i>")
+
         report.append(f"\n────────────────────────")
         report.append(f"📍 <i>Strict NSE filings only | Non-SEBI Adv.</i>")
         
         return "\n".join(report)
-
-    # _add_section_v2 is no longer needed but kept for compatibility if referenced elsewhere
-    def _add_section_v2(self, report, title, items):
-        pass

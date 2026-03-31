@@ -3,8 +3,9 @@ import os
 import logging
 import threading
 import pytz
+import time
 from datetime import datetime
-from nse_monitor.config import DB_PATH
+from nse_monitor.config import DB_PATH, ADMIN_SESSION_TIMEOUT_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,36 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # v2.0: Admin Session Persistent Authentication
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS admin_sessions (
+                    chat_id TEXT PRIMARY KEY,
+                    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             
+            # v4.0: Instrumented Alert Dispatch Log & Impact Tracking
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS alert_dispatch_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    news_id INTEGER,
+                    symbol TEXT,
+                    dispatch_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    score INTEGER,
+                    sentiment TEXT,
+                    trigger_class TEXT,
+                    price_start REAL,
+                    price_15m REAL,
+                    price_60m REAL,
+                    price_eod REAL,
+                    accuracy_score REAL,
+                    FOREIGN KEY (news_id) REFERENCES news_items (id)
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_time ON alert_dispatch_log(dispatch_time)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_symbol ON alert_dispatch_log(symbol)")
+
             # Initial Config Seeds
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '5')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('media_mute', '0')")
@@ -166,6 +196,16 @@ class Database:
             if 'processing_status' not in columns:
                 logger.warning("🔄 Upgrading Database: Adding 'processing_status' column to news_items...")
                 self.conn.execute("ALTER TABLE news_items ADD COLUMN processing_status INTEGER DEFAULT 0")
+
+            # v4.0: instrumented auto-migration for alert_dispatch_log
+            cursor.execute("PRAGMA table_info(alert_dispatch_log)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'trigger_class' not in columns:
+                logger.warning("🔄 Upgrading Database: Adding 'trigger_class' to alert_dispatch_log...")
+                self.conn.execute("ALTER TABLE alert_dispatch_log ADD COLUMN trigger_class TEXT")
+            if 'accuracy_score' not in columns:
+                logger.warning("🔄 Upgrading Database: Adding 'accuracy_score' to alert_dispatch_log...")
+                self.conn.execute("ALTER TABLE alert_dispatch_log ADD COLUMN accuracy_score REAL")
 
             # v1.0 Performance Indexes
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_news_timestamp ON news_items(timestamp)")
@@ -618,6 +658,63 @@ class Database:
                 (key, str(value))
             )
 
+    # ── v2.0: Admin Session Management ────────────────────────────────────
+    def set_admin_session(self, chat_id):
+        """Creates or updates a persistent admin session."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO admin_sessions (chat_id, last_activity) VALUES (?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(chat_id) DO UPDATE SET last_activity = excluded.last_activity",
+                (str(chat_id),)
+            )
+
+    def get_users_by_remaining_days(self, days):
+        """v4.3: Fetches users for trial expiry nudges."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE working_days_left = ?", (days,))
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_daily_funnel(self):
+        """v4.3: High-visibility Conversion Metrics for Admins."""
+        cursor = self.conn.cursor()
+        
+        # New users today
+        cursor.execute("SELECT COUNT(*) FROM users WHERE date(registered_at) = date('now', 'localtime')")
+        new_users = cursor.fetchone()[0]
+        
+        # Trial active users
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1 AND working_days_left > 0")
+        active_trials = cursor.fetchone()[0]
+        
+        # Total dispatches today
+        cursor.execute("SELECT COUNT(*) FROM alert_dispatch_log WHERE date(dispatch_time) = date('now', 'localtime')")
+        signals = cursor.fetchone()[0]
+        
+        return {
+            "new_users": new_users,
+            "active_trials": active_trials,
+            "signals_today": signals
+        }
+        """Checks if an admin session is still valid."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT last_activity FROM admin_sessions WHERE chat_id = ? AND "
+            "strftime('%s', 'now') - strftime('%s', last_activity) < ?",
+            (str(chat_id), int(timeout_minutes) * 60)
+        )
+        return cursor.fetchone() is not None
+
+    def clear_admin_session(self, chat_id):
+        """Removes an admin session on logout."""
+        with self.conn:
+            self.conn.execute("DELETE FROM admin_sessions WHERE chat_id = ?", (str(chat_id),))
+
+    def get_all_admin_sessions(self):
+        """Returns all active admin chat IDs."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT chat_id FROM admin_sessions")
+        return [row[0] for row in cursor.fetchall()]
+
     def purge_old_data(self, days=30):
         """v1.3: Deletes news items older than N days to save space on 1GB VPS."""
         with self.conn:
@@ -651,6 +748,27 @@ class Database:
             (f"-{hours} hours",)
         )
         return [{"id": row[0], "headline": row[1], "summary": row[2], "impact_score": row[3], "url": row[4], "source": row[5], "symbol": row[6]} for row in cursor.fetchall()]
+
+    def get_recent_analyzed_news(self, hours=18, min_score=1):
+        """v4.0: Fetches specifically analyzed context for summarizing reports (Filtered)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT id, headline, summary, impact_score, url, source, symbol 
+               FROM news_items 
+               WHERE created_at > datetime('now', ?) 
+               AND processing_status IN (1, 2) 
+               AND impact_score >= ? 
+               AND impact_score IS NOT NULL
+               ORDER BY impact_score DESC, created_at DESC""",
+            (f"-{hours} hours", min_score)
+        )
+        return [{"id": row[0], "headline": row[1], "summary": row[2], "impact_score": row[3], "url": row[4], "source": row[5], "symbol": row[6]} for row in cursor.fetchall()]
+
+    def get_all_user_ids(self):
+        """v4.0: Returns all chat IDs for cache reconciliation on boot."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM users")
+        return [row[0] for row in cursor.fetchall()]
 
     def save_payment_link(self, link_id, chat_id, days):
         """Stores a new payment link for background polling (Rule #24)."""
@@ -731,3 +849,15 @@ class Database:
             return (time.time() - last_ts) > 86400
         except:
             return True
+
+    def get_news_by_id(self, news_id):
+        """v4.3.1: Fetches a single news item by its database ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM news_items WHERE id = ?", (news_id,))
+        row = cursor.fetchone()
+        if not row: return None
+        return {
+            "id": row[0], "source": row[1], "symbol": row[2], 
+            "headline": row[3], "summary": row[4], "url": row[5],
+            "impact_score": row[10], "sentiment": row[11]
+        }

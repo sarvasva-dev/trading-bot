@@ -1,507 +1,468 @@
-import logging
-import sys
-import os
+import asyncio
+import atexit
 import hashlib
+import logging
+import logging.handlers
+import os
+import signal
+import sys
 import time
 import warnings
 from datetime import datetime
+import inspect
+
+import aiohttp
 import pytz
-import threading
-import atexit
-import signal
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from nse_monitor.config import BOT_NAME, LOGS_DIR, PID_FILE_NAME, ROOT_DIR
+from nse_monitor.database import Database
+from nse_monitor.impact_tracker import ImpactTracker
+from nse_monitor.llm_processor import LLMProcessor
+from nse_monitor.market_analyzer import MarketAnalyzer
+from nse_monitor.nudge_manager import NudgeManager
+from nse_monitor.pdf_processor import PDFProcessor
+from nse_monitor.report_builder import ReportBuilder
+from nse_monitor.scheduler import MarketScheduler
+from nse_monitor.sources.bulk_deal_source import BulkDealSource
+from nse_monitor.sources.economic_times_source import EconomicTimesSource
+from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
+from nse_monitor.sources.nse_sme_source import NseSmeSource
+from nse_monitor.sources.nse_source import NSESource
+from nse_monitor.telegram_bot import TelegramBot
+from nse_monitor.telegram_notifier import TelegramNotifier
+from nse_monitor.trading_calendar import TradingCalendar
+from nse_monitor.watchdog import BotWatchdog
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def check_single_instance():
-    """Ensures only one instance of the bot is running using a PID file lock."""
-    pid_file = "nsebot.pid"
-    import psutil
-    if os.path.exists(pid_file):
+
+class SafeConsoleStreamHandler(logging.StreamHandler):
+    """Avoid UnicodeEncodeError on cp1252/local terminals."""
+
+    def emit(self, record):
         try:
-            with open(pid_file, 'r') as f:
-                old_pid = int(f.read().strip())
-            if psutil.pid_exists(old_pid):
-                logger.error(f"FATAL: Instance already running (PID {old_pid}).")
-                sys.exit(1)
-            else:
-                os.remove(pid_file)
+            msg = self.format(record)
+            stream = self.stream
+            encoding = getattr(stream, "encoding", None) or "utf-8"
+            stream.write(msg.encode(encoding, errors="replace").decode(encoding) + self.terminator)
+            self.flush()
         except Exception:
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
-    atexit.register(lambda: os.remove(pid_file) if os.path.exists(pid_file) else None)
+            self.handleError(record)
 
 
-from nse_monitor.config import (
-    LOGS_DIR, ALERT_THRESHOLD, MAX_ALERTS_PER_HOUR, BOT_NAME,
-    TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ROOT_DIR
-)
-from nse_monitor.database import Database
-from nse_monitor.report_builder import ReportBuilder
-from nse_monitor.telegram_bot import TelegramBot
-from nse_monitor.sources.nse_source import NSESource
-from nse_monitor.sources.nse_sme_source import NseSmeSource
-from nse_monitor.sources.economic_times_source import EconomicTimesSource
-from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
-from nse_monitor.sources.bulk_deal_source import BulkDealSource
-from nse_monitor.llm_processor import LLMProcessor
-from nse_monitor.pdf_processor import PDFProcessor
-from nse_monitor.watchdog import BotWatchdog
-from nse_monitor.telegram_notifier import TelegramNotifier
-from nse_monitor.trading_calendar import TradingCalendar
-
-import logging.handlers
-
-# ── Logging Setup ─────────────────────────────────────────────────────────────
 def ist_time(*args):
-    return datetime.now(pytz.timezone('Asia/Kolkata')).timetuple()
+    return datetime.now(pytz.timezone("Asia/Kolkata")).timetuple()
+
 
 logging.Formatter.converter = ist_time
 os.makedirs(LOGS_DIR, exist_ok=True)
-
-# v1.3.3: Rotating Logs (Max 5MB per file, 3 backups)
 _log_path = os.path.join(LOGS_DIR, "app.log")
 _log_handler = logging.handlers.RotatingFileHandler(
-    _log_path, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
+    _log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
 )
-_log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        _log_handler
-    ]
-)
+_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+_log_handler.setFormatter(_formatter)
+_console_handler = SafeConsoleStreamHandler(sys.stdout)
+_console_handler.setFormatter(_formatter)
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _log_handler])
 logger = logging.getLogger("NSEPulse")
+
+
+def _pid_file_path():
+    return os.path.abspath(os.path.join(ROOT_DIR, PID_FILE_NAME))
+
+
+def _remove_pid_file(pid_file):
+    try:
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except Exception as exc:
+        logger.warning("PID cleanup failed at %s: %s", pid_file, exc)
+
+
+def check_single_instance():
+    import psutil
+
+    pid_file = _pid_file_path()
+    logger.info("Instance lock path: %s", pid_file)
+
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip())
+            if psutil.pid_exists(old_pid):
+                logger.error("FATAL: Instance already running (PID %s).", old_pid)
+                sys.exit(1)
+            logger.warning("Stale PID file found for dead PID %s. Cleaning up.", old_pid)
+            _remove_pid_file(pid_file)
+        except Exception as exc:
+            logger.warning("Unreadable/stale PID file. Cleaning up. Reason: %s", exc)
+            _remove_pid_file(pid_file)
+
+    with open(pid_file, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    atexit.register(lambda: _remove_pid_file(pid_file))
 
 
 class MarketIntelligenceSystem:
     def __init__(self):
-        logger.info(f"═══════════════════════════════════════════")
-        logger.info(f"  {BOT_NAME} v1.0 — Industrial Engine Boot")
-        logger.info(f"═══════════════════════════════════════════")
+        logger.info("=" * 48)
+        logger.info("%s v2.0 - ASYNC OS BOOT", BOT_NAME)
+        logger.info("=" * 48)
 
         self.ist = pytz.timezone("Asia/Kolkata")
         self.db = Database()
 
-        # v1.3: Real-time 'IP Pressure' bridge for Admin Notifications
-        def notify_admin_on_ban(alert_text):
-            if hasattr(self, 'bot'):
-                self.bot.send_admin_alert(alert_text)
+        async def notify_admin_on_ban(alert_text):
+            if hasattr(self, "bot"):
+                result = self.bot._send_raw(os.getenv("TELEGRAM_ADMIN_CHAT_ID"), alert_text)
+                if inspect.isawaitable(result):
+                    await result
 
         from nse_monitor.nse_api import NSEClient
-        self.nse_client = NSEClient(on_403=notify_admin_on_ban)
 
+        self.nse_client = NSEClient(on_403=notify_admin_on_ban)
         self.bot = TelegramBot(db=self.db, nse_client=self.nse_client)
         self.pdf_processor = PDFProcessor()
         self.llm_processor = LLMProcessor()
         self.report_builder = ReportBuilder(self.bot, self.db, self.llm_processor)
+        self.analyzer = MarketAnalyzer(self.nse_client)
+        self.impact_tracker = ImpactTracker(self.db, self.nse_client)
+        self.nudge_manager = NudgeManager(self.db, self.bot)
         self.calendar = TradingCalendar()
 
-        # v1.0: Full source suite including SME
+        self.daily_alerts_count = 0
+        self.last_budget_reset = None
+        self.cooldowns = {}
+
         self.sources = [
             NSESource(client=self.nse_client),
-            NseSmeSource(client=self.nse_client),    # NEW: SME Segment
+            NseSmeSource(client=self.nse_client),
             EconomicTimesSource(),
             MoneycontrolSource(),
             BulkDealSource(nse_client=self.nse_client),
         ]
 
-        # v1.0: Thematic Clustering Memory (symbol → last_alert_timestamp)
         self.alert_memory = {}
-
-        # v1.1: Notifiers & Watchdog
+        self.memory_lock = asyncio.Lock()
         self.notifier = TelegramNotifier()
-        log_file = os.path.join(ROOT_DIR, "logs", "service.log")
-        self.watchdog = BotWatchdog(self.notifier, log_file)
+        self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
+        logger.info("System initialized. Async core online.")
 
-        # v1.1: Thread-safe memory lock
-        self.memory_lock = threading.Lock()
-
-        # Threaded Telegram Handler
-        self.bot.register_menu_commands()
-        self.update_thread = threading.Thread(
-            target=self._update_polling_loop, daemon=True
-        )
-        self.update_thread.start()
-
-        logger.info("✅ All systems initialized. v1.0 Online.")
-
-    def _update_polling_loop(self):
-        """Background thread: handles Telegram user messages without blocking main cycle."""
-        while True:
-            try:
-                self.bot.handle_updates()
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Telegram Thread Error: {e}")
-                time.sleep(5)
+    async def start_background_tasks(self):
+        if inspect.iscoroutinefunction(self.bot.handle_updates):
+            asyncio.create_task(self.bot.handle_updates())
+        else:
+            asyncio.create_task(asyncio.to_thread(self.bot.handle_updates))
+        self.watchdog.start()
 
     def is_market_hours(self):
-        """v1.0: Uses TradingCalendar for accurate market hours check."""
         now = datetime.now(self.ist)
         if not TradingCalendar.is_trading_day(now):
             return False
         return 9 <= now.hour < 16
 
-    def eod_billing(self):
-        """Runs at 16:00 IST to deduct 1 market day post-market."""
+    async def eod_billing(self):
         now = datetime.now(self.ist)
-        from nse_monitor.trading_calendar import TradingCalendar
         if TradingCalendar.is_trading_day(now):
-            logger.info(f"📅 Post-Market Ledger EOD ({now.strftime('%d %b %Y')}): Decrementing user credits...")
+            logger.info("Post-market EOD: decrementing user credits.")
             self.db.decrement_working_days()
         else:
-            holiday_name = TradingCalendar.get_holiday_name(now)
-            reason = f"NSE Holiday ({holiday_name})" if holiday_name else "Weekend"
-            logger.info(f"🗓️ {reason}: Skipping Post-Market credit deduction.")
+            logger.info("Skipping EOD credit deduction (holiday/weekend).")
 
-    def daily_maintenance(self):
-        """
-        v1.0: Runs at midnight IST.
-        - Sends expiry reminders to exhausted users.
-        - Runs DB maintenance and backup.
-        """
-        now = datetime.now(self.ist)
-
-        # Send expiry reminders
+    async def daily_maintenance(self):
+        logger.info("Running midnight maintenance.")
         expired_users = self.db.get_expired_users()
-        if expired_users:
-            logger.info(f"Sending expiry reminders to {len(expired_users)} users...")
-            for chat_id in expired_users:
-                try:
-                    self.bot._send_expiry_reminder(chat_id)
-                except Exception:
-                    continue
-
-        # v1.3.3: DB Maintenance and Backup
+        for chat_id in expired_users:
+            try:
+                await self.bot._send_raw(chat_id, "Subscription expired. Please recharge to continue.")
+            except Exception:
+                continue
         self.db.run_maintenance()
         self.db.backup()
 
-    def send_preexpiry_reminders(self):
-        """Runs at 6 PM IST — warns users with 1 day left."""
-        users = self.db.get_expiring_soon_users()
-        if not users:
+    async def check_pending_payments(self):
+        pending = self.db.get_pending_payment_links()
+        if not pending:
             return
-        logger.info(f"Sending 24h pre-expiry reminders to {len(users)} users...")
-        for chat_id, first_name in users:
-            try:
-                msg = (
-                    f"⚠️ <b>Heads up, {first_name}!</b>\n"
-                    f"────────────────────────\n"
-                    f"Your Market Pulse subscription expires <b>tomorrow</b>.\n\n"
-                    f"Renew now to keep receiving institutional NSE signals. 📈\n"
-                )
-                self.bot._send_raw(chat_id, msg, {
-                    "inline_keyboard": [
-                        [{"text": "🔄 Renew Now", "callback_data": "sub_menu"}],
-                        [{"text": "🛠️ Contact Admin", "url": "https://wa.me/917985040858"}]
-                    ]
-                })
-            except Exception:
-                continue
+        from nse_monitor.payment_processor import RazorpayProcessor
 
-    def check_pending_payments(self):
-        """Polls Razorpay for pending payment links and auto-activates on success."""
-        pending_links = self.db.get_pending_payment_links()
-        if not pending_links:
-            return
+        rp = RazorpayProcessor()
+        loop = asyncio.get_event_loop()
+        for pl_id, chat_id, _days in pending:
+            days_added = await loop.run_in_executor(None, lambda: rp.verify_payment_status(pl_id))
+            if days_added:
+                self.db.add_working_days(chat_id, days_added)
+                self.db.update_payment_link_status(pl_id, "processed")
+                await self.bot._send_raw(chat_id, f"Payment success. {days_added} market days added.")
 
-        for pl_id, chat_id, days in pending_links:
-            try:
-                from nse_monitor.payment_processor import RazorpayProcessor
-                rp = RazorpayProcessor()
-                days_to_add = rp.verify_payment_status(pl_id)
-                if days_to_add:
-                    self.db.add_working_days(chat_id, days_to_add)
-                    self.db.update_payment_link_status(pl_id, 'processed')
-                    msg = (
-                        f"✅ <b>Payment Successful!</b>\n"
-                        f"────────────────────────\n"
-                        f"Ref: <code>{pl_id}</code>\n\n"
-                        f"<b>{days_to_add} Market Days</b> added. Use /plan to view expiry. 📈"
-                    )
-                    self.bot._send_raw(chat_id, msg)
-                    logger.warning(f"AUTO-PAYMENT SUCCESS: {chat_id} | +{days_to_add} days")
-            except Exception as e:
-                logger.error(f"Error during auto-payment check for {pl_id}: {e}")
+    async def health_check(self):
+        """Pre-flight system validation with explicit Telegram network diagnostics."""
+        logger.info("Running startup health checks...")
 
-    # ── v1.0: ZERO-LOSS INTELLIGENCE CYCLE ───────────────────────────────────
-    def run_cycle(self):
-        """
-        v1.0: Zero-Loss Intelligence Cycle.
-        STEP 1: Fetch & Ingest — all new items go into DB as 'Pending' (status=0).
-        STEP 2: Process — take 4 oldest Pending items, run them through AI.
-        STEP 3: Dispatch — if score passes threshold, send via Async broadcaster.
-        """
-        logger.info("╔══════════════════════════════════════╗")
-        logger.info("║   v1.0 Intelligence Cycle — START    ║")
-        logger.info("╚══════════════════════════════════════╝")
+        # 1) Database check
+        try:
+            self.db.set_config("health_check_ping", str(time.time()))
+            logger.info("Health: Database writable [OK]")
+        except Exception as exc:
+            logger.error("Health: Database writable [FAIL] (%s)", exc)
+            return False
+
+        # 2) Telegram reachability check
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://api.telegram.org", timeout=10) as resp:
+                    if resp.status >= 500:
+                        logger.error("Health: Telegram network blocked/throttled [FAIL] (HTTP %s)", resp.status)
+                        logger.error(
+                            "Note: Text may intermittently work, but binary PDF uploads may fail in this environment."
+                        )
+                        return False
+                    logger.info("Health: Telegram network reachable [OK] (HTTP %s)", resp.status)
+        except Exception as exc:
+            logger.error("Health: Telegram network blocked/throttled [FAIL] (%s)", exc)
+            logger.error("Note: Text may intermittently work, but binary PDF uploads may fail in this environment.")
+            return False
+
+        # 3) Telegram auth check (getMe)
+        try:
+            url = f"{self.bot.base_url}/getMe"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as resp:
+                    body = await resp.text()
+                    if resp.status == 200:
+                        logger.info("Health: Telegram reachable + auth ok [OK]")
+                    elif resp.status in (401, 403):
+                        logger.error("Health: Telegram reachable but auth/token fail [FAIL] (HTTP %s)", resp.status)
+                        logger.error("Telegram response: %s", body[:400])
+                        return False
+                    else:
+                        logger.error("Health: Telegram reachable but API error [FAIL] (HTTP %s)", resp.status)
+                        logger.error("Telegram response: %s", body[:400])
+                        return False
+        except Exception as exc:
+            logger.error("Health: Telegram auth check [FAIL] (%s)", exc)
+            return False
+
+        # 4) AI key check
+        if self.llm_processor.sarvam_key:
+            logger.info("Health: AI intelligence key present [OK]")
+        else:
+            logger.error("Health: AI intelligence key missing [FAIL]")
+            return False
+
+        return True
+
+    async def run_cycle(self):
+        logger.info("Starting strict intelligence cycle.")
         self.watchdog.heartbeat()
 
-        # ── STEP 1: FETCH & INGEST ALL SOURCES ───────────────────────────────
+        now = datetime.now(self.ist)
+        today_date = now.date()
+        if self.last_budget_reset != today_date:
+            self.daily_alerts_count = 0
+            self.last_budget_reset = today_date
+            self.cooldowns = {}
+            logger.info("Daily budget and cooldown state reset.")
+
+        tasks = [source.fetch() for source in self.sources]
+        source_results = await asyncio.gather(*tasks, return_exceptions=True)
+
         raw_items = []
-        for source in self.sources:
-            try:
-                # v1.3.6: Skip NSE sources if not connected (Prevents cycle crashes)
-                source_name = getattr(source, 'NAME', 'Unknown')
-                if source_name in ("NSE", "NSE_SME") and not self.nse_client.is_connected:
-                    logger.warning(f"⚠️ Source [{source_name}] skipped: NSE Client not connected yet.")
-                    continue
-                    
-                items = source.fetch()
-                if items:
-                    tz = pytz.timezone("Asia/Kolkata")
-                    now = datetime.now(tz)
-                    # Noise filter
-                    ignore_kw = [
-                        "trading window", "shareholding pattern",
-                        "compliance certificate", "postal ballot",
-                        "record date for agm", "registered office"
-                    ]
-                    for item in items:
-                        # v2.0: Media Mute Filter (Live Admin Control)
-                        is_official = item.get("source") in ("NSE", "NSE_SME")
-                        media_mute = self.db.get_config("media_mute", "0") == "1"
-                        
-                        if not is_official and media_mute:
-                            logger.debug(f"🔇 Skipping Media item due to LIVE MUTE: {item.get('headline', '')[:50]}")
-                            continue
+        fetched_count = 0
+        for i, items in enumerate(source_results):
+            if isinstance(items, Exception):
+                logger.error("Source %s failed: %s", i, items)
+                continue
+            if items:
+                raw_items.extend(items)
+                fetched_count += len(items)
 
-                        if any(kw in item.get('headline', '').lower() for kw in ignore_kw):
-                            continue
+        if fetched_count == 0 and self.is_market_hours():
+            logger.warning("Pipeline alert: zero news items fetched globally.")
 
-                        # Timestamp-based age filter (max 24h lookback)
-                        ts_str = item.get('timestamp', '')
-                        if ts_str:
-                            try:
-                                if 'T' in ts_str:
-                                    ts = datetime.fromisoformat(
-                                        ts_str.replace('Z', '+00:00')
-                                    ).astimezone(tz)
-                                elif '-' in ts_str and ':' in ts_str:
-                                    if len(ts_str.split('-')[0]) == 4:
-                                        ts = datetime.fromisoformat(ts_str).astimezone(tz)
-                                    else:
-                                        ts = datetime.strptime(
-                                            ts_str, "%d-%b-%Y %H:%M:%S"
-                                        ).replace(tzinfo=tz)
-                                else:
-                                    ts = now
-                                age_min = (now - ts).total_seconds() / 60
-                                if age_min > 1440:  # Older than 24h
-                                    continue
-                                item['age_minutes'] = age_min
-                            except Exception:
-                                item['age_minutes'] = 0
-
-                        raw_items.append(item)
-                    logger.info(f"Source [{source.NAME}]: {len(items)} fetched, after filter: {len(raw_items)} total so far.")
-            except Exception as e:
-                logger.error(f"Source [{getattr(source, 'NAME', '?')}] Fetch Error: {e}")
-
-        # ── INGEST INTO DB (deduplication happens here) ───────────────────────
         ingested = 0
         for item in raw_items:
-            # STEP 1.2: Identity Hash (v2.0 Unified)
-            # Combines headline, symbol, and raw source id to prevent cross-source collisions
-            raw_id = item.get('raw_id', '')
-            hash_input = f"{item.get('headline', '').lower()}|{item.get('symbol', 'N/A').upper()}|{raw_id}"
-            content_hash = hashlib.sha256(hash_input.encode()).hexdigest()
-            
-            existing_id, existing_source = self.db.news_exists(item.get("url"), content_hash)
-            if existing_id:
-                # v2.0 Upranking Logic: If existing is Media and new is Official, promote it.
-                is_current_official = item.get("source") in ("NSE", "NSE_SME")
-                is_existing_media = existing_source not in ("NSE", "NSE_SME")
-                
-                if is_current_official and is_existing_media:
-                    logger.info(f"🔄 Upranking {existing_id}: {existing_source} -> {item.get('source')} (Official Filing found)")
-                    self.db.update_news_source(existing_id, item.get("source"))
-                continue
+            raw_id = item.get("raw_id", "")
+            hash_in = f"{item.get('headline', '').lower()}|{item.get('symbol', 'N/A').upper()}|{raw_id}"
+            content_hash = hashlib.sha256(hash_in.encode()).hexdigest()
 
-            item["content_hash"] = content_hash
-            db_id = self.db.add_news_item(item)
-            if db_id:
-                ingested += 1
+            exists, _ = self.db.news_exists(item.get("url"), content_hash)
+            if not exists:
+                item["content_hash"] = content_hash
+                if self.db.add_news_item(item):
+                    ingested += 1
 
-        logger.info(f"📥 Ingested {ingested} new items into Zero-Loss Queue.")
+        await self.nudge_manager.run_audit()
+        logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
-        # ── STEP 2: PROCESS TOP 4 PENDING ITEMS ─────────────────────────────
-        pending_items = self.db.get_pending_news(limit=4)
-        if not pending_items:
-            logger.info("📡 Queue empty — no pending items to process this cycle.")
+        pending = self.db.get_pending_news(limit=4)
+        if not pending:
             return False
-
-        logger.info(f"🔄 Processing {len(pending_items)} pending items from queue...")
 
         market_on = self.is_market_hours()
-        alert_sent = False
-        used_symbols = set()
+        analysis_tasks = [self._process_single_item(item, market_on) for item in pending]
+        results = await asyncio.gather(*analysis_tasks)
 
-        # v1.1 - Concurrent AI Processing using ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(self._process_single_item, item, market_on) for item in pending_items]
-            for future in as_completed(futures):
-                try:
-                    res = future.result()
-                    if res: alert_sent = True
-                except Exception as e:
-                    logger.error(f"Error in concurrent AI task: {e}")
+        analyzed_count = len([r for r in results if r is not None])
+        logger.info("Intelligence: analyzed=%s", analyzed_count)
+        return any(results)
 
-        return alert_sent
+    async def _process_single_item(self, item, market_on):
+        news_id = item["db_id"]
+        from nse_monitor.config import ALERT_POLICY_MODE, ALLOWED_LIVE_SOURCES, DAILY_ALERT_HARD_CAP, NEUTRAL_BLOCK, SYMBOL_COOLDOWN_MIN
 
-    def _process_single_item(self, item, market_on):
-        """Worker method for processing a single news item concurrently."""
-        news_id = item['db_id']
-        alert_sent_flag = False
-
-        # ── PDF Enrichment ───────────────────────────────────────────────
-        if item.get("url"):
+        pdf_path = None
+        if item.get("url") and ".pdf" in item["url"].lower():
             try:
-                pdf_path = self.pdf_processor.download_pdf(item["url"])
-                text = self.pdf_processor.extract_text(pdf_path)
+                loop = asyncio.get_event_loop()
+                pdf_path = await loop.run_in_executor(None, lambda: self.pdf_processor.download_pdf(item["url"]))
+                text = await loop.run_in_executor(None, lambda: self.pdf_processor.extract_text(pdf_path))
                 if text and len(text) > 100:
-                    meaningful = text[500:4000].strip()
-                    item["summary"] = (item.get("summary", "") + f"\n[FILING EXTRACT]: {meaningful}")
-                    self.db.update_news_summary(news_id, item["summary"])
-            except Exception as e:
-                logger.debug(f"PDF enrichment failed for {news_id}: {e}")
+                    item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:3000]}"
+            except Exception:
+                pass
 
-        # ── AI Analysis ──────────────────────────────────────────────────
-        source_name = item.get("source", "NSE")
-        analysis = self.llm_processor.analyze_single_event(
-            [item],
-            market_status="OPEN" if market_on else "CLOSED",
-            source_name=source_name
+        analysis = await self.llm_processor.analyze_single_event(
+            [item], market_status="OPEN" if market_on else "CLOSED", source_name=item.get("source")
         )
-
         if not analysis:
-            logger.error(f"❌ AI returned None for: {item.get('headline', '')[:60]}")
             self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
+            return None
+
+        score = int(analysis.get("impact_score", 0))
+        symbol = str(analysis.get("symbol", "N/A")).upper()
+        sentiment = analysis.get("sentiment", "Neutral")
+
+        if NEUTRAL_BLOCK and sentiment == "Neutral":
+            logger.info("Policy block: neutral sentiment for %s", symbol)
+            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
             return False
 
-        score = analysis.get("impact_score", 0)
-        valid = analysis.get("valid_event", False)
-
-        is_official = source_name in ("NSE", "NSE_SME")
-        from nse_monitor.config import ALERT_THRESHOLD
-        
-        # v2.0: Use Live Config from DB
-        db_threshold = int(self.db.get_config("ai_threshold", ALERT_THRESHOLD))
-        required_score = db_threshold if is_official else (db_threshold + 2)
-
-        self.db.mark_analysis_complete(
-            news_id, score, analysis.get("sentiment", "Neutral"),
-            trigger=analysis.get("trigger"),
-            perspective=analysis.get("sector"), alerted=False
-        )
-
-        if not valid or score < required_score:
-            logger.info(f"Rejected: {item.get('headline', '')[:50]}... | Score: {score} | Required: {required_score}")
-            return False
-
-        # ── Thematic Deduplication (Thread Safe) ─────────────────────────
-        symbol = str(analysis.get("symbol", "UNKNOWN")).upper()
-        now_ts = time.time()
-        
-        with self.memory_lock:
-            # Clean old entries (> 1 hour)
-            self.alert_memory = {k: v for k, v in self.alert_memory.items() if now_ts - v < 3600}
-            
-            if symbol in self.alert_memory:
-                last_time = self.alert_memory[symbol]
-                mins_ago = int((now_ts - last_time) / 60)
-                logger.info(f"🔇 Dedup: Suppressing duplicate alert for {symbol} (sent {mins_ago}m ago)")
+        if market_on and ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
+            if score < 8 or not analysis.get("valid_event"):
                 return False
-                
-            # Always record to memory (including UNKNOWN to prevent local cycle spam)
-            self.alert_memory[symbol] = now_ts
+            source_name = item.get("source", "").upper().strip()
+            allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
+            if source_name not in allowed:
+                logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
 
-        # ── SIGNAL DISPATCH (Synchronous inside ThreadPool Worker) ───────
-        is_big = analysis.get("is_big_ticket", False)
-        is_sme = analysis.get("is_sme", item.get("is_sme", False))
-        is_time_critical = analysis.get("time_critical", False)
-        
-        # ── OFF-MARKET SUPPRESSION ───────────────────────────────────────
+        if not market_on and score < 10:
+            logger.info("Post-market suppression: %s score %s < 10", symbol, score)
+            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+            return False
+
+        source_name = item.get("source", "")
+        if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
+            logger.info("Media suppression: %s is ingest-only", symbol)
+            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+            return False
+
+        if market_on and self.daily_alerts_count >= DAILY_ALERT_HARD_CAP:
+            if score < 9:
+                logger.warning(
+                    "Budget exhausted (%s/%s). Suppression: %s",
+                    self.daily_alerts_count,
+                    DAILY_ALERT_HARD_CAP,
+                    symbol,
+                )
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
+            logger.info("[CAP_BYPASS_9_10] Emergency signal for %s (%s/10)", symbol, score)
+
+        now_ts = time.time()
+        if symbol in self.cooldowns:
+            gap = (now_ts - self.cooldowns[symbol]) / 60
+            if gap < SYMBOL_COOLDOWN_MIN:
+                if score >= 9:
+                    logger.info("[BYPASS_COOLDOWN] Priority alert for %s (%s/10)", symbol, score)
+                else:
+                    logger.info("Cooldown hit: %s (%s min)", symbol, int(gap))
+                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                    return False
+
+        smart_money = None
+        if score >= 7:
+            smart_money = await self.analyzer.analyze_smart_money(symbol)
+            if smart_money:
+                analysis["smart_money"] = smart_money
+
         should_send = market_on or score >= 9
-        
         if should_send:
-            self.bot.send_signal(item, analysis)
+            send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
+            if inspect.isawaitable(send_result):
+                await send_result
             self.db.mark_alert_sent(news_id)
-            logger.info(f"🔥 ALERT DISPATCHED: {symbol} | Score: {score}/10 | {analysis.get('sentiment')} | {'🏦 SME' if is_sme else ''} {'🔥 BIG' if is_big else ''}")
-        else:
-            logger.info(f"🌙 OFF-MARKET: Suppressing broadcast for {symbol} (Score: {score}/10). Saved for morning report.")
+            self.daily_alerts_count += 1
+            self.cooldowns[symbol] = now_ts
+            logger.info("Dispatched #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
+
+            if market_on:
+                asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
 
         self.db.mark_analysis_complete(
-            news_id, score, analysis.get("sentiment", "Neutral"),
+            news_id,
+            score,
+            sentiment,
             trigger=analysis.get("trigger"),
-            perspective=analysis.get("sector"), alerted=should_send
+            perspective=analysis.get("sector"),
+            alerted=should_send,
         )
-        return should_send
-
-    def safe_run_cycle(self):
-        """v1.3.3: Crash-protected wrapper with Automated Daily Backup."""
-        try:
-            # v1.3.3: Auto-Backup check before each cycle
-            if self.db.needs_backup():
-                self.db.backup()
-                
-            self.run_cycle()
-        except Exception as e:
-            logger.error(f"Cycle failure: {e}", exc_info=True)
+        return analysis
 
 
-def main():
-    # v1.3.3: Graceful Shutdown Handlers
-    def shutdown_signal_handler(sig, frame):
-        logger.info(f"🚨 Received shutdown signal ({sig}). Finalizing system...")
-        system.db.conn.close()
-        logger.info("✅ Database flushed and closed. Goodbye!")
-        sys.exit(0)
+async def main():
+    import argparse
 
-    signal.signal(signal.SIGINT, shutdown_signal_handler)
-    signal.signal(signal.SIGTERM, shutdown_signal_handler)
+    parser = argparse.ArgumentParser(description="Institutional Intelligence Engine")
+    parser.add_argument("--health", action="store_true", help="Run system health checks and exit.")
+    args = parser.parse_args()
 
-    try:
-        check_single_instance()
-        
-        # v1.3.7: Start Admin Dashboard FIRST (Ensures immediate responsiveness)
-        try:
-            from admin_bot import AdminPanel
-            admin_p = AdminPanel()
-            admin_thread = threading.Thread(target=admin_p.run, daemon=True)
-            admin_thread.start()
-            logger.info("✅ Admin Dashboard Bot started (Priority).")
-        except Exception as e:
-            logger.error(f"Failed to start Admin Bot: {e}")
+    check_single_instance()
+    system = MarketIntelligenceSystem()
 
-        # Now start the Heavy Intelligence Engine
-        system = MarketIntelligenceSystem()
+    if args.health:
+        success = await system.health_check()
+        sys.exit(0 if success else 1)
 
-        # Start Watchdog
-        system.watchdog.start()
+    await system.start_background_tasks()
 
-        # Start Scheduler
-        from nse_monitor.scheduler import MarketScheduler
-        scheduler = MarketScheduler(system)
+    from admin_bot import AdminPanel
 
-        # Run first cycle immediately on startup
-        logger.info("🚀 Running initial intelligence cycle on startup...")
-        system.safe_run_cycle()
+    admin_panel = AdminPanel()
+    asyncio.create_task(admin_panel.run())
+    logger.info("Admin dashboard bot started.")
 
-        # Hand off to scheduler (blocking)
-        scheduler.start()
-
-    except Exception as e:
-        logger.critical(f"🔥 FATAL Boot Error: {e}", exc_info=True)
+    if not await system.health_check():
+        logger.critical("FATAL: Health check failed. Shutting down.")
         sys.exit(1)
+
+    scheduler = MarketScheduler(system)
+    asyncio.create_task(scheduler.start())
+
+    logger.info("Starting startup warmup (3 forced cycles).")
+    for i in range(3):
+        try:
+            logger.info("Warmup cycle %s/3", i + 1)
+            await system.run_cycle()
+            await asyncio.sleep(5)
+        except Exception as exc:
+            logger.error("Warmup cycle %s failed: %s", i + 1, exc)
+
+    logger.info("Warmup complete. System entering high-trust monitoring mode.")
+
+    while True:
+        await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Graceful shutdown received.")
+    except Exception as exc:
+        logger.critical("FATAL: %s", exc, exc_info=True)

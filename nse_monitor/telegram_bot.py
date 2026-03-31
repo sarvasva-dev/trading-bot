@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import requests
 import time
 import html
@@ -6,7 +6,7 @@ import os
 import json
 import pytz
 from datetime import datetime, timedelta
-from nse_monitor.config import BOT_NAME, ADMIN_PASSWORD
+from nse_monitor.config import BOT_NAME, ADMIN_PASSWORD, TELEGRAM_DOCUMENT_TIMEOUT_SEC
 from nse_monitor.payment_processor import RazorpayProcessor
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ class TelegramBot:
         self.dynamic_ids_file = "data/dynamic_chat_ids.json"
         self.admin_sessions = {} # chat_id: timestamp
         self.last_update_id = 0 # Track Telegram offsets
+        self.ist = pytz.timezone("Asia/Kolkata")
         self._load_dynamic_ids()
         self._sync_with_db()
         self._sync_telegram_offset() # v2.0: Prevent startup "vomit"
@@ -714,6 +715,35 @@ class TelegramBot:
                 time.sleep(1 * (attempt + 1))
         return None
 
+    def _send_document(self, chat_id, file_path, caption="Reference Filing Document"):
+        """Returns (success, failed_reason)."""
+        if not file_path or not os.path.exists(file_path):
+            return False, "file_missing"
+        endpoint = f"{self.base_url}/sendDocument"
+        try:
+            with open(file_path, "rb") as f:
+                files = {
+                    "document": (
+                        os.path.basename(file_path),
+                        f,
+                        "application/pdf",
+                    )
+                }
+                data = {
+                    "chat_id": str(chat_id),
+                    "caption": caption,
+                }
+                resp = requests.post(endpoint, data=data, files=files, timeout=TELEGRAM_DOCUMENT_TIMEOUT_SEC)
+                if resp.status_code == 200:
+                    return True, None
+                reason = f"http_{resp.status_code}:{resp.text[:300]}"
+                logger.error("PDF delivery failed chat_id=%s reason=%s", chat_id, reason)
+                return False, reason
+        except Exception as exc:
+            reason = f"exception:{type(exc).__name__}:{exc}"
+            logger.error("PDF delivery failed chat_id=%s reason=%s", chat_id, reason)
+            return False, reason
+
     def send_report(self, report_text):
         """Sends a structured pre-market report to active users."""
         if not self.token: return
@@ -733,7 +763,7 @@ class TelegramBot:
                 logger.error(f"Failed to send report to {chat_id}: {e}")
         logger.info(f"Broadcasted report to {len(active_users)} active users.")
 
-    def send_signal(self, item, analysis):
+    def send_signal(self, item, analysis, pdf_path=None):
         """v15.0: Enhanced Signal Dispatcher with Big Ticket Badges and Source Awareness."""
         if not self.token or not self.chat_ids: return False
 
@@ -781,6 +811,19 @@ class TelegramBot:
             except Exception as e:
                 logger.error(f"Failed to send alert to {chat_id}: {e}")
             
+        if pdf_path and os.path.exists(pdf_path):
+            file_size = os.path.getsize(pdf_path) / (1024 * 1024)
+            if file_size < 5:
+                pdf_caption = f"Filings for {symbol.upper()} | Conviction: {impact_score}/10"
+                for chat_id in active_users:
+                    ok, failed_reason = self._send_document(chat_id, pdf_path, caption=pdf_caption)
+                    if not ok:
+                        fallback_text = "PDF upload failed in this network; filing link attached if available."
+                        if url:
+                            fallback_text += f"\n{url}"
+                        self._send_raw(chat_id, fallback_text)
+                        logger.warning("PDF fallback sent chat_id=%s failed_reason=%s", chat_id, failed_reason)
+
         return success
     def _handle_history(self, chat_id):
         """Displays user's successful payment history (v12.0)."""

@@ -1,7 +1,7 @@
 import logging
 import json
-import requests
-import time
+import aiohttp
+import asyncio
 import os
 import re
 try:
@@ -16,9 +16,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# THE FULL 22-RULE INSTITUTIONAL PROMPT TEMPLATE (v1.0)
-# ─────────────────────────────────────────────────────────────────────────────
+# ── INSTITUTIONAL PROMPT TEMPLATE (v1.0) ──────────────────────────────────────
 INSTITUTIONAL_PROMPT = """
 ROLE: Lead Quantitative Strategist, NSE Institutional Desk (Top-Tier Hedge Fund)
 TASK: Analyze this market news/filing with MAXIMUM PRECISION for immediate institutional impact.
@@ -172,34 +170,30 @@ OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE. NO MARKDOWN.
 }}
 """
 
-
 class LLMProcessor:
     def __init__(self):
         self.sarvam_key = SARVAM_API_KEY
-
         if self.sarvam_key:
-            logger.info("✅ AI Engine (Sarvam HTTP Core): Ready — 22-Rule Mode Active")
+            logger.info("✅ AI Engine (Sarvam Async Core): Ready — 22-Rule Mode Active")
         else:
             logger.error("SARVAM_API_KEY is missing in .env")
 
-    def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
-        """Analyzes a single event using the full 22-Rule Institutional Engine."""
+    async def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
+        """Analyzes a single event using the full 22-Rule Institutional Engine (Async)."""
         if not self.sarvam_key:
             return None
 
-        # Build consolidated context
         lead_news = event_group[0]
         context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news.get('summary', '')}"
 
-        # Rule #3: Source bias
         source_bias = ""
-        if source_name not in ("NSE", "SME"):
+        # Rule: Only NSE/Official sources bypass the strictly-skeptical media filter
+        if (source_name or "NSE").upper() not in ["NSE", "NSE_SME", "NSE_BULK"]:
             source_bias = (
                 "⚠️ MEDIA SOURCE DETECTED: Be EXTREMELY STRICT. "
                 "Only score >= 8 if event is definitively confirmed by the article."
             )
 
-        # Rule #22: Amount detection
         amount_found = self._extract_amount(context_text)
         amount_hint = (
             f"Detected amounts in filing: {amount_found}. Apply Rule #4 accordingly."
@@ -216,10 +210,10 @@ class LLMProcessor:
             context_text=context_text
         )
 
-        return self._run_prompt(prompt)
+        return await self._run_prompt(prompt)
 
-    def _run_prompt(self, prompt):
-        """v1.4.2: Robust direct-request implementation (Bypassing SDK attribute errors)."""
+    async def _run_prompt(self, prompt):
+        """v1.5.0: Async implementation for Sarvam AI Core."""
         if not self.sarvam_key:
             return None
             
@@ -244,66 +238,57 @@ class LLMProcessor:
             "temperature": 0.1
         }
         
-        for attempt in range(3):
-            try:
-                # v1.4.2: Direct API call for stability
-                logger.info(f"📡 Dispatching Institutional Prompt to Sarvam AI Core (Attempt {attempt + 1}/3)...")
-                r = requests.post(url, headers=headers, json=payload, timeout=60)
-                r.raise_for_status()
-                data = r.json()
-                
-                content_raw = data['choices'][0]['message']['content']
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(3):
+                try:
+                    logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/3)...")
+                    async with session.post(url, headers=headers, json=payload, timeout=60) as r:
+                        if r.status != 200:
+                            logger.error(f"Sarvam API Error: {r.status}")
+                            if attempt < 2: await asyncio.sleep(2 ** attempt)
+                            continue
+                            
+                        data = await r.json()
+                        content_raw = data['choices'][0]['message']['content']
 
-                if not content_raw:
-                    logger.warning("Sarvam returned empty response.")
-                    return None
+                        if not content_raw:
+                            logger.warning("Sarvam returned empty response.")
+                            return None
 
-                return self._robust_json_parse(content_raw)
+                        return self._robust_json_parse(content_raw)
 
-            except Exception as e:
-                logger.error(f"Sarvam AI attempt {attempt + 1} failed: {e}", exc_info=False)
-                if attempt < 2:
-                    import time
-                    time.sleep(2 ** attempt)  # Exponential backoff
-                else:
-                    return None
+                except Exception as e:
+                    logger.error(f"Sarvam AI attempt {attempt + 1} failed: {e}")
+                    if attempt < 2: await asyncio.sleep(2 ** attempt)
+            
+        return None
 
     def _robust_json_parse(self, raw_text):
         """Extracts and repairs JSON from LLM output."""
-        if not raw_text:
-            return None
-
+        if not raw_text: return None
         cleaned = raw_text.strip()
-
-        # Strip markdown
         if "```" in cleaned:
             cleaned = re.sub(r"```json|```", "", cleaned).strip()
 
         start = cleaned.find("{")
-        if start == -1:
-            logger.warning(f"No JSON start found in: {cleaned[:100]}...")
-            return None
+        if start == -1: return None
 
         end = cleaned.rfind("}")
         if end == -1 or end < start:
-            logger.warning("Truncated JSON detected. Attempting repair...")
             json_str = cleaned[start:] + "\n}"
         else:
             json_str = cleaned[start:end + 1]
 
-        # Clean trailing commas
         json_str = re.sub(r",\s*([\]\}])", r"\1", json_str)
 
         try:
             return json.loads(json_str)
         except json.JSONDecodeError:
-            logger.error("JSON Parse failed after repair. Attempting regex extraction...")
             return self._regex_extract(json_str)
 
     def _extract_amount(self, text):
         """Finds Crore/Billion values in filing text."""
-        if not text:
-            return None
+        if not text: return None
         matches = re.findall(
             r'([\d,]+(?:\.\d+)?)\s*(?:Cr|Crore|Billion|Million|Rs\.?|INR|Lakh)',
             text, re.IGNORECASE
@@ -314,85 +299,80 @@ class LLMProcessor:
         """Last-ditch regex extraction when JSON is broken."""
         try:
             valid = "true" in text.lower()
-            symbol_match = re.search(r'"symbol":\s*"([^"]+)"', text)
-            score_match = re.search(r'"impact_score":\s*(\d+)', text)
-            trigger_match = re.search(r'"trigger":\s*"([^"]+)"', text)
-            sentiment_match = re.search(r'"sentiment":\s*"([^"]+)"', text)
+            sym = re.search(r'"symbol":\s*"([^"]+)"', text)
+            sco = re.search(r'"impact_score":\s*(\d+)', text)
+            tri = re.search(r'"trigger":\s*"([^"]+)"', text)
+            sen = re.search(r'"sentiment":\s*"([^"]+)"', text)
 
-            if symbol_match and score_match:
+            if sym and sco:
                 return {
                     "valid_event": valid,
-                    "symbol": symbol_match.group(1),
-                    "impact_score": int(score_match.group(1)),
-                    "trigger": trigger_match.group(1) if trigger_match else "Analysis Partial",
-                    "sentiment": sentiment_match.group(1) if sentiment_match else "Neutral",
-                    "is_big_ticket": False,
-                    "is_sme": False,
-                    "time_critical": False,
-                    "global_linkage": False,
-                    "sector": "Unknown",
-                    "expected_move": "Intraday",
-                    "key_insight": "Partial extraction due to JSON error.",
-                    "summary": "Full analysis failed. Critical parameters recovered."
+                    "symbol": sym.group(1),
+                    "impact_score": int(sco.group(1)),
+                    "trigger": tri.group(1) if tri else "Partial analysis",
+                    "sentiment": sen.group(1) if sen else "Neutral",
+                    "is_big_ticket": False, "is_sme": False, "time_critical": False,
+                    "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
+                    "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed."
                 }
-        except Exception:
-            pass
+        except: pass
         return None
 
-    def summarize_morning_batch(self, analyzed_items):
-        """Creates an executive summary of all off-market news for the 08:30 AM Morning Report."""
-        if not self.sarvam_key or not analyzed_items:
-            return {}
+    async def summarize_morning_batch(self, analyzed_items):
+        """v4.0: Creates an executive summary with hard caps and deterministic fallback (Async)."""
+        if not self.sarvam_key or not analyzed_items: return {}
+
+        # 1. Capping: Top 15 items only (by impact score)
+        sorted_items = sorted(analyzed_items, key=lambda x: int(x.get("impact_score") or 0), reverse=True)[:15]
 
         news_list_str = ""
-        for i, item in enumerate(analyzed_items):
-            if isinstance(item, dict):
-                headline = item.get("headline", "N/A")
-                source = item.get("source", "N/A")
-                url = item.get("url", "#")
-                impact = item.get("impact_score", 0)
-            else:
-                # Legacy tuple support
-                headline, _, source, url, impact = item[0], item[1], item[2], item[3], item[4]
-
-            news_list_str += f"{i + 1}. [{source}] {headline} (Impact: {impact}/10) | {url}\n"
+        for i, item in enumerate(sorted_items):
+            # 2. Truncation: 300 chars max per item to save context
+            headline = item.get("headline", "N/A")[:200]
+            summary = item.get("summary", "N/A")[:300]
+            source = item.get("source", "N/A")
+            impact = item.get("impact_score", 0)
+            news_list_str += f"{i + 1}. [{source}] {headline} (Impact: {impact}/10)\n   Summary: {summary}\n"
 
         prompt = f"""
-You are the Chief Intelligence Officer of a top-tier Indian Hedge Fund.
-Synthesize these off-market NSE news events into a "MORNING MARKET INTELLIGENCE BRIEF" for the 09:15 open.
-
-OFF-MARKET EVENTS:
-{news_list_str}
-
-REQUIREMENTS:
-1. CRITICAL NARRATIVE: The single most important macro/micro theme.
-2. SECTOR FOCUS: Which sectors (Banking, IT, Pharma, Defence, Auto) are likely most active.
-3. SENTIMENT: Overall bias for the opening bell.
-4. TONE: Professional, succinct, institutional. No fluff.
-
-RESPONSE (STRICT JSON ONLY):
-{{
-  "theme": "Top Theme Headline (5-8 words)",
-  "summary": "3-4 sentences of high-density synthesis.",
-  "sectors_to_watch": "Sector1, Sector2, Sector3",
-  "sentiment": "Positive | Negative | Cautious | Neutral"
-}}
-"""
-        return self._run_prompt(prompt) or {}
+        You are the Chief Intelligence Officer of a top-tier Indian Hedge Fund.
+        Synthesize these off-market NSE news events into a "MORNING MARKET INTELLIGENCE BRIEF" for the 09:15 open.
+        
+        OFF-MARKET EVENTS (TOP {len(sorted_items)}):
+        {news_list_str}
+        
+        RESPONSE (STRICT JSON):
+        {{ "theme": "...", "summary": "...", "sectors_to_watch": "...", "sentiment": "..." }}
+        """
+        
+        res = await self._run_prompt(prompt)
+        
+        # 3. Deterministic Fallback
+        if not res:
+            logger.warning("LLM Batch Summary failed. Using deterministic fallback.")
+            top_headlines = [item.get("headline", "N/A") for item in sorted_items[:3]]
+            return {
+                "theme": "High-Impact Data Flow",
+                "summary": f"Focus on {', '.join(top_headlines)} and related sector movements.",
+                "sectors_to_watch": "Varies by ticker",
+                "sentiment": "Mixed/Data-Driven"
+            }
+            
+        return res
 
     # ── Backward-compatibility wrappers ──────────────────────────────────────
-    def analyze_news_batch(self, news_items, market_status="CLOSED"):
+    async def analyze_news_batch(self, news_items, market_status="CLOSED"):
         results = []
         for item in news_items:
-            res = self.analyze_single_event([item], market_status=market_status, source_name=item.get("source", "NSE"))
+            res = await self.analyze_single_event([item], market_status=market_status, source_name=item.get("source", "NSE"))
             if res and res.get("valid_event", False):
                 res["indices"] = [0]
                 results.append(res)
         return results
 
-    def analyze_news(self, company, text, source_type="corporate", market_status="CLOSED"):
+    async def analyze_news(self, company, text, source_type="corporate", market_status="CLOSED"):
         item = {"source": source_type, "headline": company, "summary": text}
-        result = self.analyze_single_event([item], market_status=market_status, source_name=source_type)
+        result = await self.analyze_single_event([item], market_status=market_status, source_name=source_type)
         if result and result.get("valid_event", False):
             return result
         return self._fallback(company, "Rejection/Invalid Event")
