@@ -111,16 +111,16 @@ class AdminPanel:
             parts = text.split()
             if len(parts) == 2 and parts[1] == ADMIN_PASSWORD:
                 self.db.set_admin_session(chat_id)
-                await self._send(chat_id, "ðŸ”“ <b>Authentication Successful!</b>\nYou now have persistent admin access.")
+                await self._send(chat_id, "<b>Authentication Successful!</b>\nYou now have persistent admin access.")
                 await self._send_main_menu(chat_id)
                 logger.warning(f"New Admin Login: {chat_id}")
             else:
-                await self._send(chat_id, "ðŸš« <b>Invalid Credentials.</b>")
+                await self._send(chat_id, "<b>Invalid Credentials.</b>")
             return
 
         # 2. Admin Command Guard
         if not self.is_admin(chat_id):
-            await self._send(chat_id, "ðŸ”’ <b>Access Denied.</b>\nPlease use <code>/login <password></code>")
+            await self._send(chat_id, "<b>Access Denied.</b>\nPlease use <code>/login <password></code>")
             return
 
         # 3. Command Router
@@ -140,7 +140,7 @@ class AdminPanel:
             await self._handle_broadcast(chat_id, text)
         elif text == "/logout":
             self.db.clear_admin_session(chat_id)
-            await self._send(chat_id, "ðŸ”’ <b>Logged Out.</b> Session cleared.")
+            await self._send(chat_id, "<b>Logged Out.</b> Session cleared.")
 
     async def _handle_callback(self, cb):
         from_id = str(cb["from"]["id"])
@@ -156,7 +156,7 @@ class AdminPanel:
         elif data == "menu_list" or data == "menu_users":
             await self._handle_list(chat_id, 0)
         elif data == "menu_broadcast":
-            await self._send(chat_id, "ðŸ“¢ Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+            await self._send(chat_id, "Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
         elif data == "menu_config":
             await self._show_config_menu(chat_id)
         elif data == "menu_hisab":
@@ -166,13 +166,13 @@ class AdminPanel:
         elif data.startswith("set_threshold_"):
             val = data.split("_")[2]
             self.db.set_config("ai_threshold", val)
-            await self._answer_callback(cb["id"], f"âœ… AI Threshold set to {val}", show_alert=True)
+            await self._answer_callback(cb["id"], f"OK. AI Threshold set to {val}", show_alert=True)
             await self._show_config_menu(chat_id)
         elif data == "toggle_media_mute":
             current = self.db.get_config("media_mute", "0")
             new_val = "1" if current == "0" else "0"
             self.db.set_config("media_mute", new_val)
-            await self._answer_callback(cb["id"], f"âœ… Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
+            await self._answer_callback(cb["id"], f"OK. Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
             await self._show_config_menu(chat_id)
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
@@ -201,24 +201,24 @@ class AdminPanel:
                 # Synchronous operation wrapped in executor
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, lambda: self.db.conn.execute("VACUUM"))
-                await self._answer_callback(cb["id"], "âœ… Database Vacuum Complete!", show_alert=True)
+                await self._answer_callback(cb["id"], "OK. Database vacuum complete.", show_alert=True)
             except Exception as e:
-                await self._answer_callback(cb["id"], f"âŒ Error: {e}", show_alert=True)
+                await self._answer_callback(cb["id"], f"Error: {e}", show_alert=True)
         elif data == "action_purge":
             try:
                 deleted = self.db.purge_old_data(days=30)
-                await self._answer_callback(cb["id"], f"âœ… Purge Complete: {deleted} items removed.", show_alert=True)
+                await self._answer_callback(cb["id"], f"OK. Purge complete: {deleted} items removed.", show_alert=True)
             except Exception as e:
-                await self._answer_callback(cb["id"], f"âŒ Purge Failed: {e}", show_alert=True)
+                await self._answer_callback(cb["id"], f"Purge failed: {e}", show_alert=True)
         elif data == "action_sync_holidays":
             from nse_monitor.trading_calendar import TradingCalendar
             # Sync is synchronous requests, wrapping for UI responsiveness
             loop = asyncio.get_event_loop()
             success = await loop.run_in_executor(None, TradingCalendar.sync_from_nse)
             if success:
-                await self._answer_callback(cb["id"], "âœ… NSE Holidays Synced!", show_alert=True)
+                await self._answer_callback(cb["id"], "OK. NSE holidays synced.", show_alert=True)
             else:
-                await self._answer_callback(cb["id"], "âŒ Sync Failed. Check logs.", show_alert=True)
+                await self._answer_callback(cb["id"], "Sync failed. Check logs.", show_alert=True)
         
         await self._answer_callback(cb["id"])
 
@@ -246,7 +246,7 @@ class AdminPanel:
     async def _show_config_menu(self, chat_id):
         thresh = self.db.get_config("ai_threshold", "5")
         mute = self.db.get_config("media_mute", "0")
-        mute_label = "ðŸ”‡ UNMUTE Media" if mute == "1" else "ðŸ”ˆ MUTE Media"
+        mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
         
         text = (
             f"<b>BOT LIVE CONFIG</b>\n"
@@ -272,16 +272,16 @@ class AdminPanel:
         debits_week, users_week = self.db.get_global_hisab(days=7)
         
         text = (
-            f"ðŸ“ˆ <b>GLOBAL AUDIT (HISAB)</b>\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"<b>GLOBAL AUDIT (HISAB)</b>\n"
+            f"------------------------------\n"
             f"<b>Today's Volume:</b>\n"
-            f"ðŸ’³ Deducted: {debits} Market Days\n"
-            f"ðŸ‘¥ Unique Users: {users}\n\n"
+            f"Deducted: {debits} Market Days\n"
+            f"Unique Users: {users}\n\n"
             f"<b>Last 7 Days:</b>\n"
-            f"ðŸ’³ Total Debits: {debits_week}\n"
-            f"ðŸ‘¥ Unique Reach: {users_week}\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-            f"ðŸ“ <i>Internal Finance Audit Only</i>"
+            f"Total Debits: {debits_week}\n"
+            f"Unique Reach: {users_week}\n"
+            f"------------------------------\n"
+            f"<i>Internal Finance Audit Only</i>"
         )
         await self._send(chat_id, text)
 
@@ -323,7 +323,7 @@ class AdminPanel:
         users = self.db.get_all_users(limit=limit, offset=offset)
         page = offset // limit
         
-        text = f"ðŸ“‹ <b>USER AUDIT (Page {page + 1})</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+        text = f"<b>USER AUDIT (Page {page + 1})</b>\n------------------------------\n"
         keyboard = {"inline_keyboard": []}
         
         for u in users:
@@ -331,20 +331,20 @@ class AdminPanel:
             has_username = uname and uname not in ("manual_entry", "Unknown", "Legacy", "Sync_Legacy", "None")
             uname_label = f"@{uname}" if has_username else f"...{str(uid)[-6:]}"
             display_name = name if name and name != "Sync_Legacy" else "User"
-            icon = "ðŸ’Ž" if active else "ðŸ†“"
+            icon = "ACTIVE" if active else "INACTIVE"
             text += f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>\n"
-            keyboard["inline_keyboard"].append([{"text": f"âš™ï¸ {uname_label}", "callback_data": f"manage_{uid}"}])
+            keyboard["inline_keyboard"].append([{"text": f"Manage {uname_label}", "callback_data": f"manage_{uid}"}])
         
         nav_buttons = []
         if offset > 0:
-            nav_buttons.append({"text": "â¬…ï¸ Prev", "callback_data": f"list_page_{page - 1}"})
+            nav_buttons.append({"text": "Prev", "callback_data": f"list_page_{page - 1}"})
         if len(users) == limit:
-            nav_buttons.append({"text": "Next âž¡ï¸", "callback_data": f"list_page_{page + 1}"})
+            nav_buttons.append({"text": "Next", "callback_data": f"list_page_{page + 1}"})
         
         if nav_buttons: keyboard["inline_keyboard"].append(nav_buttons)
         if not users: text += "<i>No more users found.</i>"
             
-        text += "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\nðŸ’¡ <i>Click user for Manage Menu.</i>"
+        text += "------------------------------\n<i>Click user for Manage Menu.</i>"
         await self._send(chat_id, text, keyboard)
 
     async def _show_manage_menu(self, chat_id, uid):
@@ -353,54 +353,54 @@ class AdminPanel:
         
         name = user[1]
         text = (
-            f"âš™ï¸ <b>MANAGE USER:</b> {name}\n"
-            f"ðŸ†” <b>ID:</b> <code>{uid}</code>\n"
-            f"â³ <b>Current Balance:</b> {user[4]} days\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"<b>MANAGE USER:</b> {name}\n"
+            f"<b>ID:</b> <code>{uid}</code>\n"
+            f"<b>Current Balance:</b> {user[4]} days\n"
+            f"------------------------------\n"
             f"Select an action to perform:"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "ðŸ”„ Reset to 0 Days", "callback_data": f"reset_{uid}"}],
-                [{"text": "ðŸš« Deactivate Account", "callback_data": f"deactivate_{uid}"}],
-                [{"text": "âž• Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
-                [{"text": "ðŸ”™ Back to List", "callback_data": "menu_list"}]
+                [{"text": "Reset to 0 Days", "callback_data": f"reset_{uid}"}],
+                [{"text": "Deactivate Account", "callback_data": f"deactivate_{uid}"}],
+                [{"text": "Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
+                [{"text": "Back to List", "callback_data": "menu_list"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
 
     async def _show_plan_options(self, chat_id, uid):
-        text = f"âž• <b>SELECT PLAN TO GRANT:</b>\nGrant days to user <code>{uid}</code> instantly."
+        text = f"<b>SELECT PLAN TO GRANT:</b>\nGrant days to user <code>{uid}</code> instantly."
         keyboard = {
             "inline_keyboard": [
-                [{"text": "ðŸ”¸ Star Plan (+2d)", "callback_data": f"grant_{uid}_2"}],
-                [{"text": "ðŸ”¹ Growth Plan (+7d)", "callback_data": f"grant_{uid}_7"}],
-                [{"text": "ðŸš€ Professional (+28d)", "callback_data": f"grant_{uid}_28"}],
-                [{"text": "ðŸ† Institutional (+336d)", "callback_data": f"grant_{uid}_336"}],
-                [{"text": "ðŸ”™ Back", "callback_data": f"manage_{uid}"}]
+                [{"text": "Star Plan (+2d)", "callback_data": f"grant_{uid}_2"}],
+                [{"text": "Growth Plan (+7d)", "callback_data": f"grant_{uid}_7"}],
+                [{"text": "Professional (+28d)", "callback_data": f"grant_{uid}_28"}],
+                [{"text": "Institutional (+336d)", "callback_data": f"grant_{uid}_336"}],
+                [{"text": "Back", "callback_data": f"manage_{uid}"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
 
     async def _execute_deactivate(self, chat_id, uid):
         self.db.toggle_user_status(uid, 0)
-        await self._send(chat_id, f"ðŸš« <b>Deactivated:</b> {uid}. Signals paused.")
+        await self._send(chat_id, f"<b>Deactivated:</b> {uid}. Signals paused.")
         await self._show_manage_menu(chat_id, uid)
 
     async def _execute_reset(self, chat_id, uid):
         self.db.reset_user_days(uid)
-        await self._send(chat_id, f"âœ… <b>Reset:</b> {uid} balance is now 0.")
+        await self._send(chat_id, f"<b>Reset:</b> {uid} balance is now 0.")
         await self._show_manage_menu(chat_id, uid)
 
     async def _execute_grant_interactive(self, chat_id, uid, days):
         self.db.add_working_days(uid, days)
         self.db.toggle_user_status(uid, 1)
-        await self._send(chat_id, f"âœ… <b>Granted {days}d</b> to <code>{uid}</code>.")
+        await self._send(chat_id, f"<b>Granted {days}d</b> to <code>{uid}</code>.")
         msg = (
-            f"ðŸŽ <b>Manual Account Activation!</b>\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"<b>Manual Account Activation</b>\n"
+            f"------------------------------\n"
             f"The Administrator has credited your account with <b>{days} Market Days</b>.\n\n"
-            f"Your professional intelligence engine is now <b>LIVE</b>. ðŸ“ˆ"
+            f"Your professional intelligence engine is now <b>LIVE</b>."
         )
         await self._notify_user_via_signal_bot(uid, msg)
         await self._show_manage_menu(chat_id, uid)
@@ -408,43 +408,43 @@ class AdminPanel:
     async def _handle_find(self, chat_id, text):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            await self._send(chat_id, "ðŸ” Usage: <code>/find &lt;id/name&gt;</code>")
+            await self._send(chat_id, "Usage: <code>/find &lt;id/name&gt;</code>")
             return
         
         query = parts[1].strip()
         results = self.db.search_users(query)
         if not results:
-            await self._send(chat_id, f"âŒ No results for: <code>{query}</code>")
+            await self._send(chat_id, f"No results for: <code>{query}</code>")
             return
         
-        text_out = f"ðŸ” <b>Search:</b> <code>{query}</code>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+        text_out = f"<b>Search:</b> <code>{query}</code>\n------------------------------\n"
         keyboard = {"inline_keyboard": []}
         for uid, name, uname, active, days in results:
-            icon = "ðŸ’Ž" if active else "ðŸ†“"
+            icon = "ACTIVE" if active else "INACTIVE"
             text_out += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
-            keyboard["inline_keyboard"].append([{"text": f"âš™ï¸ {name}", "callback_data": f"manage_{uid}"}])
+            keyboard["inline_keyboard"].append([{"text": f"Manage {name}", "callback_data": f"manage_{uid}"}])
         
         await self._send(chat_id, text_out, keyboard)
 
     async def _handle_users(self, chat_id):
         users = self.db.get_all_users(limit=15)
-        text = "ðŸ‘¥ <b>LATEST USERS</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+        text = "<b>LATEST USERS</b>\n------------------------------\n"
         for u in users:
             uid, name, uname, active, days = u
-            icon = "ðŸ’Ž" if active else "ðŸ†“"
+            icon = "ACTIVE" if active else "INACTIVE"
             text += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
         await self._send(chat_id, text)
 
     async def _handle_grant(self, chat_id, text):
         parts = text.split()
         if len(parts) < 3:
-            await self._send(chat_id, "âš ï¸ Usage: <code>/grant &lt;id&gt; &lt;days&gt;</code>")
+            await self._send(chat_id, "Usage: <code>/grant &lt;id&gt; &lt;days&gt;</code>")
             return
         target_id, days = parts[1], parts[2]
         self.db.add_working_days(target_id, int(days))
         self.db.toggle_user_status(target_id, 1)
-        await self._send(chat_id, f"âœ… Granted {days}d to {target_id}.")
-        msg = f"ðŸŽ Admin credited your account with <b>{days} Market Days</b>. LIVE! ðŸ“ˆ"
+        await self._send(chat_id, f"Granted {days}d to {target_id}.")
+        msg = f"Admin credited your account with <b>{days} Market Days</b>. LIVE."
         await self._notify_user_via_signal_bot(target_id, msg)
 
     async def _notify_user_via_signal_bot(self, user_id, text):
@@ -457,18 +457,18 @@ class AdminPanel:
     async def _handle_broadcast(self, chat_id, text):
         msg_body = text.replace("/broadcast", "").strip()
         if not msg_body:
-            await self._send(chat_id, "âš ï¸ Empty broadcast.")
+            await self._send(chat_id, "Empty broadcast.")
             return
 
         active_users = self.db.get_active_users()
         count = 0
         for uid in active_users:
             try:
-                await self._send(uid, f"ðŸ“¢ <b>ADMIN ANNOUNCEMENT</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n{msg_body}", use_signal_bot=True)
+                await self._send(uid, f"<b>ADMIN ANNOUNCEMENT</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
             except: pass
-        await self._send(chat_id, f"âœ… Broadcast sent to {count} users.")
+        await self._send(chat_id, f"Broadcast sent to {count} users.")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False):
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -491,7 +491,7 @@ class AdminPanel:
         except: pass
 
     async def _handle_pulse(self, chat_id):
-        await self._send(chat_id, "ðŸ” <b>Industrial Pulse...</b>")
+        await self._send(chat_id, "<b>Industrial Pulse...</b>")
         try:
             from nse_monitor.config import START_TIME
             uptime = time.time() - START_TIME
@@ -513,15 +513,15 @@ class AdminPanel:
             ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
             
             msg = (
-                f"ðŸ›°ï¸ <b>{BOT_NAME} â€” INDUSTRIAL PULSE</b>\n"
-                f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-                f"ðŸ“ˆ <b>Uptime:</b> <code>{uptime_str}</code>\n"
-                f"ðŸ—„ï¸ <b>DB Size:</b> <code>{db_size:.2f} MB</code>\n"
-                f"ðŸ’¾ <b>Disk Used:</b> <code>{disk_pct:.1f}%</code>\n"
-                f"ðŸ§  <b>RAM Used:</b> <code>{ram}%</code>\n"
-                f"ðŸ›¡ï¸ <b>Last Backup:</b> <code>{last_bk}</code>\n"
-                f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-                f"ðŸ“ <i>IST: {ist_now}</i>"
+                f"<b>{BOT_NAME} - INDUSTRIAL PULSE</b>\n"
+                f"------------------------------\n"
+                f"<b>Uptime:</b> <code>{uptime_str}</code>\n"
+                f"<b>DB Size:</b> <code>{db_size:.2f} MB</code>\n"
+                f"<b>Disk Used:</b> <code>{disk_pct:.1f}%</code>\n"
+                f"<b>RAM Used:</b> <code>{ram}%</code>\n"
+                f"<b>Last Backup:</b> <code>{last_bk}</code>\n"
+                f"------------------------------\n"
+                f"<i>IST: {ist_now}</i>"
             )
             await self._send(chat_id, msg)
         except Exception as e:
