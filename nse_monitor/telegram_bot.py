@@ -593,61 +593,9 @@ class TelegramBot:
             self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>")
 
     def _handle_upcoming(self, chat_id):
-        """Fetches NSE Corporate Action Calendar (v12.0)."""
-        self._send_raw(chat_id, "⏳ <b>Fetching NSE Corporate Calendar...</b>")
-        try:
-            if not self.nse_client:
-                self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
-                return
-                
-            import pytz
-            ist = pytz.timezone("Asia/Kolkata")
-            now_ist = datetime.now(ist)
-            today = now_ist.strftime("%d-%m-%Y")
-            end = (now_ist + timedelta(days=14)).strftime("%d-%m-%Y")
-            url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={today}&to_date={end}&csv=false"
-            referer = "https://www.nseindia.com/companies-listing/corporate-filings-actions"
-            
-            data = self._run_async(
-                self.nse_client.get_json(
-                    url,
-                    referer=referer,
-                    warmup="https://www.nseindia.com/companies-listing/corporate-filings-actions",
-                )
-            )
-            if not data:
-                self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>")
-                return
-                
-            actions = data if isinstance(data, list) else data.get("data", [])
-            
-            if not actions:
-                self._send_raw(chat_id, "🗓️ <b>Corporate Calendar</b>\n<i>No major events in the next 14 days. Check back tomorrow.</i>")
-                return
-            
-            msg = "🗓️ <b>NSE CORPORATE CALENDAR (Next 14 Days)</b>\n────────────────────────\n"
-            shown = 0
-            for a in actions:
-                if shown >= 10: break
-                symbol = a.get("symbol", "N/A")
-                purpose = a.get("purpose", a.get("subject", "N/A"))
-                ex_date = a.get("exDate", a.get("recDate", "N/A"))
-                
-                # Highlight key events
-                if any(k in purpose.lower() for k in ["dividend", "split", "bonus", "merger", "buyback"]):
-                    icon = "🔥"
-                else:
-                    icon = "🟡"
-                
-                msg += f"{icon} <b>{symbol}</b>\n"
-                msg += f"   📅 {ex_date} | {purpose[:50]}\n\n"
-                shown += 1
-            
-            msg += "⚖️ <i>Non-SEBI Educational Resource</i>"
-            self._send_raw(chat_id, msg)
-        except Exception as e:
-            logger.error(f"Upcoming events fetch error: {e}")
-            self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>\nTry again later.")
+        """Upcoming calendar placeholder."""
+        self._send_raw(chat_id, "🗓️ <b>Corporate Calendar</b>\n<i>Coming soon.</i>")
+        return
 
     # NOTE: _handle_subscribe_menu is defined at line ~310 (dynamic version). Duplicate removed.
 
