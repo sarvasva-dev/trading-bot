@@ -155,8 +155,17 @@ class MarketIntelligenceSystem:
         if inspect.iscoroutinefunction(self.bot.handle_updates):
             asyncio.create_task(self.bot.handle_updates())
         else:
-            asyncio.create_task(asyncio.to_thread(self.bot.handle_updates))
+            asyncio.create_task(self._run_sync_bot_poller())
         self.watchdog.start()
+
+    async def _run_sync_bot_poller(self):
+        """Continuously run sync Telegram long-poller in a worker thread."""
+        while True:
+            try:
+                await asyncio.to_thread(self.bot.handle_updates)
+            except Exception as exc:
+                logger.error("Sync bot poller error: %s", exc)
+                await asyncio.sleep(1)
 
     def is_market_hours(self):
         now = datetime.now(self.ist)
