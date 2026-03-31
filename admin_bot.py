@@ -224,21 +224,21 @@ class AdminPanel:
 
     async def _send_main_menu(self, chat_id):
         text = (
-            f"ðŸ› ï¸ <b>{BOT_NAME} ADMIN GUIDE (v12.0 - ASYNC)</b>\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"<b>{BOT_NAME} ADMIN GUIDE (v12.0 - ASYNC)</b>\n"
+            f"------------------------------\n"
             f"<b>Commands:</b>\n"
-            f"â€¢ <code>/users</code> â€” Active User Summary\n"
-            f"â€¢ <code>/find &lt;id/name&gt;</code> â€” Search DB\n"
-            f"â€¢ <code>/grant &lt;id&gt; &lt;days&gt;</code> â€” Manual Credit\n"
-            f"â€¢ <code>/broadcast &lt;msg&gt;</code> â€” Global Alert\n"
-            f"â€¢ <code>/status</code> â€” System Health\n\n"
-            f"Select an action below for quick access:"
+            f"- <code>/users</code> : Active User Summary\n"
+            f"- <code>/find &lt;id/name&gt;</code> : Search DB\n"
+            f"- <code>/grant &lt;id&gt; &lt;days&gt;</code> : Manual Credit\n"
+            f"- <code>/broadcast &lt;msg&gt;</code> : Global Alert\n"
+            f"- <code>/status</code> : System Health\n\n"
+            f"Select an action below:"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "ðŸ“Š System Status", "callback_data": "menu_status"}, {"text": "âš™ï¸ Bot Config", "callback_data": "menu_config"}],
-                [{"text": "ðŸ“‹ User Audit", "callback_data": "menu_list"}, {"text": "ðŸ“ˆ Global Hisab", "callback_data": "menu_hisab"}],
-                [{"text": "ðŸ“¢ Broadcast", "callback_data": "menu_broadcast"}, {"text": "ðŸ†˜ DB Rescue", "callback_data": "menu_rescue"}]
+                [{"text": "System Status", "callback_data": "menu_status"}, {"text": "Bot Config", "callback_data": "menu_config"}],
+                [{"text": "User Audit", "callback_data": "menu_list"}, {"text": "Global Hisab", "callback_data": "menu_hisab"}],
+                [{"text": "Broadcast", "callback_data": "menu_broadcast"}, {"text": "DB Rescue", "callback_data": "menu_rescue"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -249,20 +249,20 @@ class AdminPanel:
         mute_label = "ðŸ”‡ UNMUTE Media" if mute == "1" else "ðŸ”ˆ MUTE Media"
         
         text = (
-            f"âš™ï¸ <b>BOT LIVE CONFIG</b>\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-            f"ðŸŽ¯ <b>Current Threshold:</b> {thresh}/10\n"
-            f"ðŸ“¢ <b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"<b>BOT LIVE CONFIG</b>\n"
+            f"------------------------------\n"
+            f"<b>Current Threshold:</b> {thresh}/10\n"
+            f"<b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"------------------------------\n"
             f"<i>Changes apply instantly to the next cycle.</i>"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "ðŸŽ¯ Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
-                [{"text": "ðŸŽ¯ Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
-                [{"text": "ðŸŽ¯ Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
-                [{"text": mute_label, "callback_data": "toggle_media_mute"}],
-                [{"text": "ðŸ”™ Back to Main Menu", "callback_data": "menu_main"}]
+                [{"text": "Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
+                [{"text": "Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
+                [{"text": "Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
+                [{"text": "Toggle Media Mute", "callback_data": "toggle_media_mute"}],
+                [{"text": "Back to Main Menu", "callback_data": "menu_main"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -287,19 +287,19 @@ class AdminPanel:
 
     async def _handle_system_rescue(self, chat_id):
         text = (
-            "ðŸ†˜ <b>SYSTEM RESCUE & MAINTENANCE</b>\n"
-            "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-            "âš ï¸ <b>WARNING:</b> These actions are destructive or performance intensive.\n\n"
+            "<b>SYSTEM RESCUE & MAINTENANCE</b>\n"
+            "------------------------------\n"
+            "<b>WARNING:</b> These actions are destructive or performance intensive.\n\n"
             "<b>1. Repair DB:</b> Runs VACUUM to fix minor corruption.\n"
             "<b>2. Update Holidays:</b> Live Sync from NSE server.\n"
             "<b>3. Purge Engine:</b> Deletes news older than 30 days.\n"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "ðŸ› ï¸ Run DB Vacuum", "callback_data": "action_vacuum"}],
-                [{"text": "ðŸ—“ï¸ Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
-                [{"text": "ðŸ§¹ Purge Old News", "callback_data": "action_purge"}],
-                [{"text": "ðŸ”™ Back", "callback_data": "menu_main"}]
+                [{"text": "Run DB Vacuum", "callback_data": "action_vacuum"}],
+                [{"text": "Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
+                [{"text": "Purge Old News", "callback_data": "action_purge"}],
+                [{"text": "Back", "callback_data": "menu_main"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -307,14 +307,14 @@ class AdminPanel:
     async def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"ðŸ“Š <b>PRODUCTION STATUS (v12.0)</b>\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-            f"âœ… <b>Signal Engine:</b> ACTIVE\n"
-            f"ðŸ§  <b>AI Processor:</b> ONLINE\n\n"
-            f"ðŸ‘¥ <b>Total Users:</b> {total}\n"
-            f"âš¡ <b>Active Subs:</b> {active}\n"
-            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
-            f"ðŸ“ <i>Build: Institutional Async Pro</i>"
+            f"<b>PRODUCTION STATUS (v12.0)</b>\n"
+            f"------------------------------\n"
+            f"<b>Signal Engine:</b> ACTIVE\n"
+            f"<b>AI Processor:</b> ONLINE\n\n"
+            f"<b>Total Users:</b> {total}\n"
+            f"<b>Active Subs:</b> {active}\n"
+            f"------------------------------\n"
+            f"<i>Build: Institutional Async Pro</i>"
         )
         await self._send(chat_id, text)
 
