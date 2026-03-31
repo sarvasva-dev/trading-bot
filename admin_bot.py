@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import aiohttp
 import asyncio
 import time
@@ -50,6 +50,16 @@ class AdminPanel:
         except Exception as e:
             logger.warning(f"Offset sync failed: {e}")
 
+    async def _clear_webhook(self):
+        """Ensure getUpdates polling is not blocked by an active webhook."""
+        try:
+            url = f"{self.base_url}/deleteWebhook"
+            async with self.session.post(url, json={"drop_pending_updates": False}, timeout=8) as resp:
+                await resp.text()
+            logger.info("Admin Bot: Webhook cleared for long-polling mode.")
+        except Exception as e:
+            logger.warning(f"Admin Bot: deleteWebhook failed: {e}")
+
     def is_admin(self, chat_id):
         cid = str(chat_id)
         # 1. Owner bypass
@@ -64,6 +74,7 @@ class AdminPanel:
         
         async with aiohttp.ClientSession() as session:
             self.session = session
+            await self._clear_webhook()
             await self._set_latest_offset()
             
             while True:
@@ -100,16 +111,16 @@ class AdminPanel:
             parts = text.split()
             if len(parts) == 2 and parts[1] == ADMIN_PASSWORD:
                 self.db.set_admin_session(chat_id)
-                await self._send(chat_id, "🔓 <b>Authentication Successful!</b>\nYou now have persistent admin access.")
+                await self._send(chat_id, "ðŸ”“ <b>Authentication Successful!</b>\nYou now have persistent admin access.")
                 await self._send_main_menu(chat_id)
                 logger.warning(f"New Admin Login: {chat_id}")
             else:
-                await self._send(chat_id, "🚫 <b>Invalid Credentials.</b>")
+                await self._send(chat_id, "ðŸš« <b>Invalid Credentials.</b>")
             return
 
         # 2. Admin Command Guard
         if not self.is_admin(chat_id):
-            await self._send(chat_id, "🔒 <b>Access Denied.</b>\nPlease use <code>/login <password></code>")
+            await self._send(chat_id, "ðŸ”’ <b>Access Denied.</b>\nPlease use <code>/login <password></code>")
             return
 
         # 3. Command Router
@@ -129,7 +140,7 @@ class AdminPanel:
             await self._handle_broadcast(chat_id, text)
         elif text == "/logout":
             self.db.clear_admin_session(chat_id)
-            await self._send(chat_id, "🔒 <b>Logged Out.</b> Session cleared.")
+            await self._send(chat_id, "ðŸ”’ <b>Logged Out.</b> Session cleared.")
 
     async def _handle_callback(self, cb):
         from_id = str(cb["from"]["id"])
@@ -145,7 +156,7 @@ class AdminPanel:
         elif data == "menu_list" or data == "menu_users":
             await self._handle_list(chat_id, 0)
         elif data == "menu_broadcast":
-            await self._send(chat_id, "📢 Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+            await self._send(chat_id, "ðŸ“¢ Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
         elif data == "menu_config":
             await self._show_config_menu(chat_id)
         elif data == "menu_hisab":
@@ -155,13 +166,13 @@ class AdminPanel:
         elif data.startswith("set_threshold_"):
             val = data.split("_")[2]
             self.db.set_config("ai_threshold", val)
-            await self._answer_callback(cb["id"], f"✅ AI Threshold set to {val}", show_alert=True)
+            await self._answer_callback(cb["id"], f"âœ… AI Threshold set to {val}", show_alert=True)
             await self._show_config_menu(chat_id)
         elif data == "toggle_media_mute":
             current = self.db.get_config("media_mute", "0")
             new_val = "1" if current == "0" else "0"
             self.db.set_config("media_mute", new_val)
-            await self._answer_callback(cb["id"], f"✅ Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
+            await self._answer_callback(cb["id"], f"âœ… Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
             await self._show_config_menu(chat_id)
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
@@ -190,44 +201,44 @@ class AdminPanel:
                 # Synchronous operation wrapped in executor
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, lambda: self.db.conn.execute("VACUUM"))
-                await self._answer_callback(cb["id"], "✅ Database Vacuum Complete!", show_alert=True)
+                await self._answer_callback(cb["id"], "âœ… Database Vacuum Complete!", show_alert=True)
             except Exception as e:
-                await self._answer_callback(cb["id"], f"❌ Error: {e}", show_alert=True)
+                await self._answer_callback(cb["id"], f"âŒ Error: {e}", show_alert=True)
         elif data == "action_purge":
             try:
                 deleted = self.db.purge_old_data(days=30)
-                await self._answer_callback(cb["id"], f"✅ Purge Complete: {deleted} items removed.", show_alert=True)
+                await self._answer_callback(cb["id"], f"âœ… Purge Complete: {deleted} items removed.", show_alert=True)
             except Exception as e:
-                await self._answer_callback(cb["id"], f"❌ Purge Failed: {e}", show_alert=True)
+                await self._answer_callback(cb["id"], f"âŒ Purge Failed: {e}", show_alert=True)
         elif data == "action_sync_holidays":
             from nse_monitor.trading_calendar import TradingCalendar
             # Sync is synchronous requests, wrapping for UI responsiveness
             loop = asyncio.get_event_loop()
             success = await loop.run_in_executor(None, TradingCalendar.sync_from_nse)
             if success:
-                await self._answer_callback(cb["id"], "✅ NSE Holidays Synced!", show_alert=True)
+                await self._answer_callback(cb["id"], "âœ… NSE Holidays Synced!", show_alert=True)
             else:
-                await self._answer_callback(cb["id"], "❌ Sync Failed. Check logs.", show_alert=True)
+                await self._answer_callback(cb["id"], "âŒ Sync Failed. Check logs.", show_alert=True)
         
         await self._answer_callback(cb["id"])
 
     async def _send_main_menu(self, chat_id):
         text = (
-            f"🛠️ <b>{BOT_NAME} ADMIN GUIDE (v12.0 - ASYNC)</b>\n"
-            f"────────────────────────\n"
+            f"ðŸ› ï¸ <b>{BOT_NAME} ADMIN GUIDE (v12.0 - ASYNC)</b>\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
             f"<b>Commands:</b>\n"
-            f"• <code>/users</code> — Active User Summary\n"
-            f"• <code>/find &lt;id/name&gt;</code> — Search DB\n"
-            f"• <code>/grant &lt;id&gt; &lt;days&gt;</code> — Manual Credit\n"
-            f"• <code>/broadcast &lt;msg&gt;</code> — Global Alert\n"
-            f"• <code>/status</code> — System Health\n\n"
+            f"â€¢ <code>/users</code> â€” Active User Summary\n"
+            f"â€¢ <code>/find &lt;id/name&gt;</code> â€” Search DB\n"
+            f"â€¢ <code>/grant &lt;id&gt; &lt;days&gt;</code> â€” Manual Credit\n"
+            f"â€¢ <code>/broadcast &lt;msg&gt;</code> â€” Global Alert\n"
+            f"â€¢ <code>/status</code> â€” System Health\n\n"
             f"Select an action below for quick access:"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "📊 System Status", "callback_data": "menu_status"}, {"text": "⚙️ Bot Config", "callback_data": "menu_config"}],
-                [{"text": "📋 User Audit", "callback_data": "menu_list"}, {"text": "📈 Global Hisab", "callback_data": "menu_hisab"}],
-                [{"text": "📢 Broadcast", "callback_data": "menu_broadcast"}, {"text": "🆘 DB Rescue", "callback_data": "menu_rescue"}]
+                [{"text": "ðŸ“Š System Status", "callback_data": "menu_status"}, {"text": "âš™ï¸ Bot Config", "callback_data": "menu_config"}],
+                [{"text": "ðŸ“‹ User Audit", "callback_data": "menu_list"}, {"text": "ðŸ“ˆ Global Hisab", "callback_data": "menu_hisab"}],
+                [{"text": "ðŸ“¢ Broadcast", "callback_data": "menu_broadcast"}, {"text": "ðŸ†˜ DB Rescue", "callback_data": "menu_rescue"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -235,23 +246,23 @@ class AdminPanel:
     async def _show_config_menu(self, chat_id):
         thresh = self.db.get_config("ai_threshold", "5")
         mute = self.db.get_config("media_mute", "0")
-        mute_label = "🔇 UNMUTE Media" if mute == "1" else "🔈 MUTE Media"
+        mute_label = "ðŸ”‡ UNMUTE Media" if mute == "1" else "ðŸ”ˆ MUTE Media"
         
         text = (
-            f"⚙️ <b>BOT LIVE CONFIG</b>\n"
-            f"────────────────────────\n"
-            f"🎯 <b>Current Threshold:</b> {thresh}/10\n"
-            f"📢 <b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
-            f"────────────────────────\n"
+            f"âš™ï¸ <b>BOT LIVE CONFIG</b>\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"ðŸŽ¯ <b>Current Threshold:</b> {thresh}/10\n"
+            f"ðŸ“¢ <b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
             f"<i>Changes apply instantly to the next cycle.</i>"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "🎯 Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
-                [{"text": "🎯 Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
-                [{"text": "🎯 Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
+                [{"text": "ðŸŽ¯ Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
+                [{"text": "ðŸŽ¯ Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
+                [{"text": "ðŸŽ¯ Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
                 [{"text": mute_label, "callback_data": "toggle_media_mute"}],
-                [{"text": "🔙 Back to Main Menu", "callback_data": "menu_main"}]
+                [{"text": "ðŸ”™ Back to Main Menu", "callback_data": "menu_main"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -261,34 +272,34 @@ class AdminPanel:
         debits_week, users_week = self.db.get_global_hisab(days=7)
         
         text = (
-            f"📈 <b>GLOBAL AUDIT (HISAB)</b>\n"
-            f"────────────────────────\n"
+            f"ðŸ“ˆ <b>GLOBAL AUDIT (HISAB)</b>\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
             f"<b>Today's Volume:</b>\n"
-            f"💳 Deducted: {debits} Market Days\n"
-            f"👥 Unique Users: {users}\n\n"
+            f"ðŸ’³ Deducted: {debits} Market Days\n"
+            f"ðŸ‘¥ Unique Users: {users}\n\n"
             f"<b>Last 7 Days:</b>\n"
-            f"💳 Total Debits: {debits_week}\n"
-            f"👥 Unique Reach: {users_week}\n"
-            f"────────────────────────\n"
-            f"📍 <i>Internal Finance Audit Only</i>"
+            f"ðŸ’³ Total Debits: {debits_week}\n"
+            f"ðŸ‘¥ Unique Reach: {users_week}\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"ðŸ“ <i>Internal Finance Audit Only</i>"
         )
         await self._send(chat_id, text)
 
     async def _handle_system_rescue(self, chat_id):
         text = (
-            "🆘 <b>SYSTEM RESCUE & MAINTENANCE</b>\n"
-            "────────────────────────\n"
-            "⚠️ <b>WARNING:</b> These actions are destructive or performance intensive.\n\n"
+            "ðŸ†˜ <b>SYSTEM RESCUE & MAINTENANCE</b>\n"
+            "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            "âš ï¸ <b>WARNING:</b> These actions are destructive or performance intensive.\n\n"
             "<b>1. Repair DB:</b> Runs VACUUM to fix minor corruption.\n"
             "<b>2. Update Holidays:</b> Live Sync from NSE server.\n"
             "<b>3. Purge Engine:</b> Deletes news older than 30 days.\n"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "🛠️ Run DB Vacuum", "callback_data": "action_vacuum"}],
-                [{"text": "🗓️ Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
-                [{"text": "🧹 Purge Old News", "callback_data": "action_purge"}],
-                [{"text": "🔙 Back", "callback_data": "menu_main"}]
+                [{"text": "ðŸ› ï¸ Run DB Vacuum", "callback_data": "action_vacuum"}],
+                [{"text": "ðŸ—“ï¸ Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
+                [{"text": "ðŸ§¹ Purge Old News", "callback_data": "action_purge"}],
+                [{"text": "ðŸ”™ Back", "callback_data": "menu_main"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -296,14 +307,14 @@ class AdminPanel:
     async def _handle_status(self, chat_id):
         total, active = self.db.get_user_stats()
         text = (
-            f"📊 <b>PRODUCTION STATUS (v12.0)</b>\n"
-            f"────────────────────────\n"
-            f"✅ <b>Signal Engine:</b> ACTIVE\n"
-            f"🧠 <b>AI Processor:</b> ONLINE\n\n"
-            f"👥 <b>Total Users:</b> {total}\n"
-            f"⚡ <b>Active Subs:</b> {active}\n"
-            f"────────────────────────\n"
-            f"📍 <i>Build: Institutional Async Pro</i>"
+            f"ðŸ“Š <b>PRODUCTION STATUS (v12.0)</b>\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"âœ… <b>Signal Engine:</b> ACTIVE\n"
+            f"ðŸ§  <b>AI Processor:</b> ONLINE\n\n"
+            f"ðŸ‘¥ <b>Total Users:</b> {total}\n"
+            f"âš¡ <b>Active Subs:</b> {active}\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+            f"ðŸ“ <i>Build: Institutional Async Pro</i>"
         )
         await self._send(chat_id, text)
 
@@ -312,7 +323,7 @@ class AdminPanel:
         users = self.db.get_all_users(limit=limit, offset=offset)
         page = offset // limit
         
-        text = f"📋 <b>USER AUDIT (Page {page + 1})</b>\n────────────────────────\n"
+        text = f"ðŸ“‹ <b>USER AUDIT (Page {page + 1})</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
         keyboard = {"inline_keyboard": []}
         
         for u in users:
@@ -320,20 +331,20 @@ class AdminPanel:
             has_username = uname and uname not in ("manual_entry", "Unknown", "Legacy", "Sync_Legacy", "None")
             uname_label = f"@{uname}" if has_username else f"...{str(uid)[-6:]}"
             display_name = name if name and name != "Sync_Legacy" else "User"
-            icon = "💎" if active else "🆓"
+            icon = "ðŸ’Ž" if active else "ðŸ†“"
             text += f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>\n"
-            keyboard["inline_keyboard"].append([{"text": f"⚙️ {uname_label}", "callback_data": f"manage_{uid}"}])
+            keyboard["inline_keyboard"].append([{"text": f"âš™ï¸ {uname_label}", "callback_data": f"manage_{uid}"}])
         
         nav_buttons = []
         if offset > 0:
-            nav_buttons.append({"text": "⬅️ Prev", "callback_data": f"list_page_{page - 1}"})
+            nav_buttons.append({"text": "â¬…ï¸ Prev", "callback_data": f"list_page_{page - 1}"})
         if len(users) == limit:
-            nav_buttons.append({"text": "Next ➡️", "callback_data": f"list_page_{page + 1}"})
+            nav_buttons.append({"text": "Next âž¡ï¸", "callback_data": f"list_page_{page + 1}"})
         
         if nav_buttons: keyboard["inline_keyboard"].append(nav_buttons)
         if not users: text += "<i>No more users found.</i>"
             
-        text += "────────────────────────\n💡 <i>Click user for Manage Menu.</i>"
+        text += "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\nðŸ’¡ <i>Click user for Manage Menu.</i>"
         await self._send(chat_id, text, keyboard)
 
     async def _show_manage_menu(self, chat_id, uid):
@@ -342,54 +353,54 @@ class AdminPanel:
         
         name = user[1]
         text = (
-            f"⚙️ <b>MANAGE USER:</b> {name}\n"
-            f"🆔 <b>ID:</b> <code>{uid}</code>\n"
-            f"⏳ <b>Current Balance:</b> {user[4]} days\n"
-            f"────────────────────────\n"
+            f"âš™ï¸ <b>MANAGE USER:</b> {name}\n"
+            f"ðŸ†” <b>ID:</b> <code>{uid}</code>\n"
+            f"â³ <b>Current Balance:</b> {user[4]} days\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
             f"Select an action to perform:"
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "🔄 Reset to 0 Days", "callback_data": f"reset_{uid}"}],
-                [{"text": "🚫 Deactivate Account", "callback_data": f"deactivate_{uid}"}],
-                [{"text": "➕ Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
-                [{"text": "🔙 Back to List", "callback_data": "menu_list"}]
+                [{"text": "ðŸ”„ Reset to 0 Days", "callback_data": f"reset_{uid}"}],
+                [{"text": "ðŸš« Deactivate Account", "callback_data": f"deactivate_{uid}"}],
+                [{"text": "âž• Add Plan (Grant Days)", "callback_data": f"plans_{uid}"}],
+                [{"text": "ðŸ”™ Back to List", "callback_data": "menu_list"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
 
     async def _show_plan_options(self, chat_id, uid):
-        text = f"➕ <b>SELECT PLAN TO GRANT:</b>\nGrant days to user <code>{uid}</code> instantly."
+        text = f"âž• <b>SELECT PLAN TO GRANT:</b>\nGrant days to user <code>{uid}</code> instantly."
         keyboard = {
             "inline_keyboard": [
-                [{"text": "🔸 Star Plan (+2d)", "callback_data": f"grant_{uid}_2"}],
-                [{"text": "🔹 Growth Plan (+7d)", "callback_data": f"grant_{uid}_7"}],
-                [{"text": "🚀 Professional (+28d)", "callback_data": f"grant_{uid}_28"}],
-                [{"text": "🏆 Institutional (+336d)", "callback_data": f"grant_{uid}_336"}],
-                [{"text": "🔙 Back", "callback_data": f"manage_{uid}"}]
+                [{"text": "ðŸ”¸ Star Plan (+2d)", "callback_data": f"grant_{uid}_2"}],
+                [{"text": "ðŸ”¹ Growth Plan (+7d)", "callback_data": f"grant_{uid}_7"}],
+                [{"text": "ðŸš€ Professional (+28d)", "callback_data": f"grant_{uid}_28"}],
+                [{"text": "ðŸ† Institutional (+336d)", "callback_data": f"grant_{uid}_336"}],
+                [{"text": "ðŸ”™ Back", "callback_data": f"manage_{uid}"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
 
     async def _execute_deactivate(self, chat_id, uid):
         self.db.toggle_user_status(uid, 0)
-        await self._send(chat_id, f"🚫 <b>Deactivated:</b> {uid}. Signals paused.")
+        await self._send(chat_id, f"ðŸš« <b>Deactivated:</b> {uid}. Signals paused.")
         await self._show_manage_menu(chat_id, uid)
 
     async def _execute_reset(self, chat_id, uid):
         self.db.reset_user_days(uid)
-        await self._send(chat_id, f"✅ <b>Reset:</b> {uid} balance is now 0.")
+        await self._send(chat_id, f"âœ… <b>Reset:</b> {uid} balance is now 0.")
         await self._show_manage_menu(chat_id, uid)
 
     async def _execute_grant_interactive(self, chat_id, uid, days):
         self.db.add_working_days(uid, days)
         self.db.toggle_user_status(uid, 1)
-        await self._send(chat_id, f"✅ <b>Granted {days}d</b> to <code>{uid}</code>.")
+        await self._send(chat_id, f"âœ… <b>Granted {days}d</b> to <code>{uid}</code>.")
         msg = (
-            f"🎁 <b>Manual Account Activation!</b>\n"
-            f"────────────────────────\n"
+            f"ðŸŽ <b>Manual Account Activation!</b>\n"
+            f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
             f"The Administrator has credited your account with <b>{days} Market Days</b>.\n\n"
-            f"Your professional intelligence engine is now <b>LIVE</b>. 📈"
+            f"Your professional intelligence engine is now <b>LIVE</b>. ðŸ“ˆ"
         )
         await self._notify_user_via_signal_bot(uid, msg)
         await self._show_manage_menu(chat_id, uid)
@@ -397,43 +408,43 @@ class AdminPanel:
     async def _handle_find(self, chat_id, text):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            await self._send(chat_id, "🔍 Usage: <code>/find &lt;id/name&gt;</code>")
+            await self._send(chat_id, "ðŸ” Usage: <code>/find &lt;id/name&gt;</code>")
             return
         
         query = parts[1].strip()
         results = self.db.search_users(query)
         if not results:
-            await self._send(chat_id, f"❌ No results for: <code>{query}</code>")
+            await self._send(chat_id, f"âŒ No results for: <code>{query}</code>")
             return
         
-        text_out = f"🔍 <b>Search:</b> <code>{query}</code>\n────────────────────────\n"
+        text_out = f"ðŸ” <b>Search:</b> <code>{query}</code>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
         keyboard = {"inline_keyboard": []}
         for uid, name, uname, active, days in results:
-            icon = "💎" if active else "🆓"
+            icon = "ðŸ’Ž" if active else "ðŸ†“"
             text_out += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
-            keyboard["inline_keyboard"].append([{"text": f"⚙️ {name}", "callback_data": f"manage_{uid}"}])
+            keyboard["inline_keyboard"].append([{"text": f"âš™ï¸ {name}", "callback_data": f"manage_{uid}"}])
         
         await self._send(chat_id, text_out, keyboard)
 
     async def _handle_users(self, chat_id):
         users = self.db.get_all_users(limit=15)
-        text = "👥 <b>LATEST USERS</b>\n────────────────────────\n"
+        text = "ðŸ‘¥ <b>LATEST USERS</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
         for u in users:
-            uid, name, uname, active, days in u
-            icon = "💎" if active else "🆓"
+            uid, name, uname, active, days = u
+            icon = "ðŸ’Ž" if active else "ðŸ†“"
             text += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
         await self._send(chat_id, text)
 
     async def _handle_grant(self, chat_id, text):
         parts = text.split()
         if len(parts) < 3:
-            await self._send(chat_id, "⚠️ Usage: <code>/grant &lt;id&gt; &lt;days&gt;</code>")
+            await self._send(chat_id, "âš ï¸ Usage: <code>/grant &lt;id&gt; &lt;days&gt;</code>")
             return
         target_id, days = parts[1], parts[2]
         self.db.add_working_days(target_id, int(days))
         self.db.toggle_user_status(target_id, 1)
-        await self._send(chat_id, f"✅ Granted {days}d to {target_id}.")
-        msg = f"🎁 Admin credited your account with <b>{days} Market Days</b>. LIVE! 📈"
+        await self._send(chat_id, f"âœ… Granted {days}d to {target_id}.")
+        msg = f"ðŸŽ Admin credited your account with <b>{days} Market Days</b>. LIVE! ðŸ“ˆ"
         await self._notify_user_via_signal_bot(target_id, msg)
 
     async def _notify_user_via_signal_bot(self, user_id, text):
@@ -446,18 +457,18 @@ class AdminPanel:
     async def _handle_broadcast(self, chat_id, text):
         msg_body = text.replace("/broadcast", "").strip()
         if not msg_body:
-            await self._send(chat_id, "⚠️ Empty broadcast.")
+            await self._send(chat_id, "âš ï¸ Empty broadcast.")
             return
 
         active_users = self.db.get_active_users()
         count = 0
         for uid in active_users:
             try:
-                await self._send(uid, f"📢 <b>ADMIN ANNOUNCEMENT</b>\n────────────────────────\n{msg_body}", use_signal_bot=True)
+                await self._send(uid, f"ðŸ“¢ <b>ADMIN ANNOUNCEMENT</b>\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n{msg_body}", use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
             except: pass
-        await self._send(chat_id, f"✅ Broadcast sent to {count} users.")
+        await self._send(chat_id, f"âœ… Broadcast sent to {count} users.")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False):
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -480,7 +491,7 @@ class AdminPanel:
         except: pass
 
     async def _handle_pulse(self, chat_id):
-        await self._send(chat_id, "🔍 <b>Industrial Pulse...</b>")
+        await self._send(chat_id, "ðŸ” <b>Industrial Pulse...</b>")
         try:
             from nse_monitor.config import START_TIME
             uptime = time.time() - START_TIME
@@ -502,15 +513,15 @@ class AdminPanel:
             ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
             
             msg = (
-                f"🛰️ <b>{BOT_NAME} — INDUSTRIAL PULSE</b>\n"
-                f"────────────────────────\n"
-                f"📈 <b>Uptime:</b> <code>{uptime_str}</code>\n"
-                f"🗄️ <b>DB Size:</b> <code>{db_size:.2f} MB</code>\n"
-                f"💾 <b>Disk Used:</b> <code>{disk_pct:.1f}%</code>\n"
-                f"🧠 <b>RAM Used:</b> <code>{ram}%</code>\n"
-                f"🛡️ <b>Last Backup:</b> <code>{last_bk}</code>\n"
-                f"────────────────────────\n"
-                f"📍 <i>IST: {ist_now}</i>"
+                f"ðŸ›°ï¸ <b>{BOT_NAME} â€” INDUSTRIAL PULSE</b>\n"
+                f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+                f"ðŸ“ˆ <b>Uptime:</b> <code>{uptime_str}</code>\n"
+                f"ðŸ—„ï¸ <b>DB Size:</b> <code>{db_size:.2f} MB</code>\n"
+                f"ðŸ’¾ <b>Disk Used:</b> <code>{disk_pct:.1f}%</code>\n"
+                f"ðŸ§  <b>RAM Used:</b> <code>{ram}%</code>\n"
+                f"ðŸ›¡ï¸ <b>Last Backup:</b> <code>{last_bk}</code>\n"
+                f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+                f"ðŸ“ <i>IST: {ist_now}</i>"
             )
             await self._send(chat_id, msg)
         except Exception as e:
@@ -521,3 +532,4 @@ if __name__ == "__main__":
         asyncio.run(AdminPanel().run())
     except KeyboardInterrupt:
         pass
+

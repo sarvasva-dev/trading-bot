@@ -26,6 +26,7 @@ class TelegramBot:
         self._load_dynamic_ids()
         self._sync_with_db()
         self._sync_telegram_offset() # v2.0: Prevent startup "vomit"
+        self._clear_webhook()
         self.set_my_commands()
 
     def _sync_telegram_offset(self):
@@ -41,6 +42,17 @@ class TelegramBot:
                 logger.info(f"Telegram Bot: Boot sync complete. Offset set to {self.last_update_id}.")
         except Exception as e:
             logger.warning(f"Telegram Bot: Failed to sync offset on boot: {e}")
+
+    def _clear_webhook(self):
+        """Ensure getUpdates polling is not blocked by an active webhook."""
+        if not self.token:
+            return
+        try:
+            url = f"{self.base_url}/deleteWebhook"
+            requests.post(url, json={"drop_pending_updates": False}, timeout=8)
+            logger.info("Telegram Bot: Webhook cleared for long-polling mode.")
+        except Exception as e:
+            logger.warning(f"Telegram Bot: deleteWebhook failed: {e}")
 
     def set_my_commands(self):
         """Sets the unified blue menu buttons in the Telegram UI."""
