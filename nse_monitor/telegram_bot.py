@@ -112,6 +112,20 @@ class TelegramBot:
         """Alias for set_my_commands to prevent overwriting."""
         self.set_my_commands()
 
+    def _run_async(self, coro):
+        """Run async NSE client calls safely from sync bot handlers."""
+        try:
+            return asyncio.run(coro)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"Async bridge error: {e}")
+            return None
+
     def handle_updates(self):
         """Checks for new messages and handles commands via Long Polling."""
         if not self.token: return
@@ -130,9 +144,9 @@ class TelegramBot:
                         chat_id = str(update["message"]["chat"]["id"])
                         text = update["message"].get("text", "").strip()
                         first_name = update["message"]["from"].get("first_name", "User")
+                        username = update["message"]["from"].get("username", "Unknown")
                             # 1. Registration & Campaign Tracking (v1.3.1)
                         if chat_id not in self.chat_ids:
-                            username = update["message"]["from"].get("username", "Unknown")
                             
                             # Parse Campaign Tag: /start <camp_tag>
                             source_tag = "direct"
@@ -153,6 +167,10 @@ class TelegramBot:
                             else:
                                 self.db.sync_user(chat_id, first_name, username)
                                 logger.info(f"Existing User Re-synced: {chat_id}")
+
+                        # Keep profile fields fresh for existing legacy users too
+                        if self.db:
+                            self.db.sync_user(chat_id, first_name, username)
 
                         # 2. Command Router
                         if text.startswith("/start"):
@@ -513,15 +531,32 @@ class TelegramBot:
             url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
             referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
             
-            data = self.nse_client.get_json(url, referer=referer, warmup="https://www.nseindia.com/report-search/equities")
+            data = self._run_async(
+                self.nse_client.get_json(
+                    url,
+                    referer=referer,
+                    warmup="https://www.nseindia.com/report-search/equities",
+                )
+            )
             if not data:
-                self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>\nTry again during market hours.")
+                # Always provide useful fallback, even when API is unavailable/market closed
+                fallback_items = []
+                if self.db:
+                    fallback_items = [n for n in self.db.get_recent_news(hours=72) if n.get("source") == "NSE_BULK"][:6]
+                if not fallback_items:
+                    self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>Live NSE bulk feed unavailable right now. No recent cached bulk deals found.</i>")
+                    return
+                msg = "📊 <b>BULK DEALS (Recent Cached)</b>\n────────────────────────\n"
+                for n in fallback_items:
+                    msg += f"• <b>{n.get('symbol','N/A')}</b> | {n.get('headline','N/A')[:90]}\n"
+                msg += "\n⚖️ <i>Non-SEBI Educational Resource</i>"
+                self._send_raw(chat_id, msg)
                 return
                 
             deals = data.get("data", [])
             
             if not deals:
-                self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>No bulk deals reported yet today. Check after market opens (9:15 AM).</i>")
+                self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>No bulk deals reported in current live feed. Try again later; cached summary remains available.</i>")
                 return
             
             msg = "📊 <b>TODAY'S BULK DEALS</b>\n────────────────────────\n"
@@ -558,7 +593,13 @@ class TelegramBot:
             url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={today}&to_date={end}&csv=false"
             referer = "https://www.nseindia.com/companies-listing/corporate-filings-actions"
             
-            data = self.nse_client.get_json(url, referer=referer, warmup="https://www.nseindia.com/companies-listing/corporate-filings-actions")
+            data = self._run_async(
+                self.nse_client.get_json(
+                    url,
+                    referer=referer,
+                    warmup="https://www.nseindia.com/companies-listing/corporate-filings-actions",
+                )
+            )
             if not data:
                 self._send_raw(chat_id, "❌ <b>NSE Calendar temporarily unavailable.</b>")
                 return
