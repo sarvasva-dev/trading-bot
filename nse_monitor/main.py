@@ -177,7 +177,9 @@ class MarketIntelligenceSystem:
         expired_users = self.db.get_expired_users()
         for chat_id in expired_users:
             try:
-                await self.bot._send_raw(chat_id, "Subscription expired. Please recharge to continue.")
+                send_result = self.bot._send_raw(chat_id, "Subscription expired. Please recharge to continue.")
+                if inspect.isawaitable(send_result):
+                    await send_result
             except Exception:
                 continue
         self.db.run_maintenance()
@@ -196,7 +198,9 @@ class MarketIntelligenceSystem:
             if days_added:
                 self.db.add_working_days(chat_id, days_added)
                 self.db.update_payment_link_status(pl_id, "processed")
-                await self.bot._send_raw(chat_id, f"Payment success. {days_added} market days added.")
+                send_result = self.bot._send_raw(chat_id, f"Payment success. {days_added} market days added.")
+                if inspect.isawaitable(send_result):
+                    await send_result
 
     async def health_check(self):
         """Pre-flight system validation with explicit Telegram network diagnostics."""

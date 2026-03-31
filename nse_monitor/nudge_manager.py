@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import inspect
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,9 @@ class NudgeManager:
                 "To continue receiving high-conviction signals without interruption, choose a plan below.\n\n"
                 "👉 /subscribe"
             )
-            await self.bot._send_raw(user_id, msg)
+            result = self.bot._send_raw(user_id, msg)
+            if inspect.isawaitable(result):
+                await result
             logger.info(f"Nudge Sent (Expiry): {user_id}")
             await asyncio.sleep(0.5)
 

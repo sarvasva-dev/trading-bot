@@ -1,7 +1,8 @@
-import pytz
+﻿import pytz
 import asyncio
 import os
 import logging
+import inspect
 from datetime import datetime
 from nse_monitor.sources.global_source import GlobalSource
 from nse_monitor.sources.bulk_deal_source import BulkDealSource
@@ -25,15 +26,20 @@ class ReportBuilder:
         try:
             report = await self.build_pre_market_report(hours=lookback)
             if len(report) > 50:
-                await self.bot.send_report(report)
-                logger.info(f"✅ Morning Report Sent (Lookback: {lookback}h)")
+                send_result = self.bot.send_report(report)
+                if inspect.isawaitable(send_result):
+                    await send_result
+                logger.info(f"âœ… Morning Report Sent (Lookback: {lookback}h)")
             else:
-                logger.warning(f"⚠️ Morning Report too short (len: {len(report)}). Skipping send.")
+                logger.warning(f"âš ï¸ Morning Report too short (len: {len(report)}). Skipping send.")
         except Exception as e:
-            err_msg = f"❌ <b>Report Builder Failure</b>: {str(e)[:100]}"
+            err_msg = f"âŒ <b>Report Builder Failure</b>: {str(e)[:100]}"
             logger.error(f"FATAL: Report Generation Failed: {e}", exc_info=True)
             # v4.0: Alert admin on failure
-            try: await self.bot._send_raw(os.getenv("TELEGRAM_ADMIN_CHAT_ID"), err_msg)
+            try:
+                alert_result = self.bot._send_raw(os.getenv("TELEGRAM_ADMIN_CHAT_ID"), err_msg)
+                if inspect.isawaitable(alert_result):
+                    await alert_result
             except: pass
 
     async def build_pre_market_report(self, hours=18):
@@ -52,22 +58,22 @@ class ReportBuilder:
         
         logger.info(f"Report Context: {len(all_news)} items | LLM Called: {llm_called}")
 
-        report = [f"🌅 <b>NSE PULSE: MORNING INTEL</b>"]
-        report.append(f"────────────────────────")
+        report = [f"ðŸŒ… <b>NSE PULSE: MORNING INTEL</b>"]
+        report.append(f"â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€")
         
         # 1. Global Setup (Rule #19)
-        report.append(f"🌎 <b>GLOBAL SETUP</b>")
-        report.append(f"• GIFT Nifty: {global_intel.get('GIFT Nifty', 'N/A')}")
-        report.append(f"• Dow Jones: {global_intel.get('Dow Jones', 'N/A')}")
-        report.append(f"• Nasdaq: {global_intel.get('Nasdaq', 'N/A')}")
+        report.append(f"ðŸŒŽ <b>GLOBAL SETUP</b>")
+        report.append(f"â€¢ GIFT Nifty: {global_intel.get('GIFT Nifty', 'N/A')}")
+        report.append(f"â€¢ Dow Jones: {global_intel.get('Dow Jones', 'N/A')}")
+        report.append(f"â€¢ Nasdaq: {global_intel.get('Nasdaq', 'N/A')}")
         
         # 2. Executive Summary
-        report.append(f"\n🧠 <b>STRATEGIST VIEW: {ai_res.get('theme', 'Market Update')}</b>")
+        report.append(f"\nðŸ§  <b>STRATEGIST VIEW: {ai_res.get('theme', 'Market Update')}</b>")
         report.append(f"<i>{ai_res.get('summary', 'No significant news detected.')}</i>")
-        report.append(f"📊 <b>Sentiment:</b> {ai_res.get('sentiment', 'Neutral')}")
+        report.append(f"ðŸ“Š <b>Sentiment:</b> {ai_res.get('sentiment', 'Neutral')}")
         
         # 3. High Impact Signals (v4.0 Null-Safe Sort)
-        report.append(f"\n🚨 <b>INSTITUTIONAL TRIGGERS</b>")
+        report.append(f"\nðŸš¨ <b>INSTITUTIONAL TRIGGERS</b>")
         
         # Filter out impact_score=0 as per Rule #3 policy
         trigger_news = [n for n in all_news if int(n.get("impact_score") or 0) > 0]
@@ -77,10 +83,10 @@ class ReportBuilder:
             url = item.get('url', '#')
             if not url.startswith('http'): url = f"https://nsearchives.nseindia.com/corporate/{url}"
             report.append(f"<b>{idx}. {item['headline']}</b>")
-            report.append(f"👉 <a href='{url}'>Reference Filing</a>")
+            report.append(f"ðŸ‘‰ <a href='{url}'>Reference Filing</a>")
 
         # 4. Bulk & Block Deals (v4.2.1: Truthful Recap)
-        report.append(f"\n🔄 <b>BULK & BLOCK DEALS</b>")
+        report.append(f"\nðŸ”„ <b>BULK & BLOCK DEALS</b>")
         
         from nse_monitor.config import KNOWN_INSTITUTIONS, BULK_REPORT_MIN_VAL_CR, BULK_MAX_ITEMS_REPORT
         
@@ -98,18 +104,19 @@ class ReportBuilder:
                 for d in sorted_bulk:
                     # v4.2.1: Hardened matching
                     clean_name = " ".join(d['client_name'].upper().split())
-                    badge = "🏛 " if any(inst in clean_name for inst in KNOWN_INSTITUTIONS) else ""
-                    bs_icon = "🟢" if d['buy_sell'] == "BUY" else "🔴"
-                    report.append(f"• {badge}{d['symbol']}: {d['buy_sell']} {d['client_name']} | <b>₹{d['val_cr']:.1f} Cr</b> {bs_icon}")
+                    badge = "ðŸ› " if any(inst in clean_name for inst in KNOWN_INSTITUTIONS) else ""
+                    bs_icon = "ðŸŸ¢" if d['buy_sell'] == "BUY" else "ðŸ”´"
+                    report.append(f"â€¢ {badge}{d['symbol']}: {d['buy_sell']} {d['client_name']} | <b>â‚¹{d['val_cr']:.1f} Cr</b> {bs_icon}")
             else:
-                report.append(f"<i>No significant deals (>₹{BULK_REPORT_MIN_VAL_CR} Cr) detected.</i>")
+                report.append(f"<i>No significant deals (>â‚¹{BULK_REPORT_MIN_VAL_CR} Cr) detected.</i>")
         else:
             # Stale or Empty path
             expected_session = bulk_intel.get("recap_date", "N/A")
             report.append(f"<i>Session: {expected_session}</i>")
-            report.append(f"⚠️ <i>No fresh deals detected for this session.</i>")
+            report.append(f"âš ï¸ <i>No fresh deals detected for this session.</i>")
 
-        report.append(f"\n────────────────────────")
-        report.append(f"📍 <i>Strict NSE filings only | Non-SEBI Adv.</i>")
+        report.append(f"\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€")
+        report.append(f"ðŸ“ <i>Strict NSE filings only | Non-SEBI Adv.</i>")
         
         return "\n".join(report)
+

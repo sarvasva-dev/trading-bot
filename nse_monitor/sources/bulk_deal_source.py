@@ -23,7 +23,9 @@ class BulkDealSource:
 
         try:
             url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
-            data = await self.client.get_json(url, referer="https://www.nseindia.com/report-search/equities?id=all-daily-reports")
+            referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
+            warmup = "https://www.nseindia.com/report-search/equities"
+            data = await self.client.get_json(url, referer=referer, warmup=warmup)
             deals = data.get("data", []) if data else []
             results = []
 
@@ -57,7 +59,9 @@ class BulkDealSource:
         
         try:
             url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
-            data = await self.client.get_json(url, referer="https://www.nseindia.com/report-search/equities?id=all-daily-reports")
+            referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
+            warmup = "https://www.nseindia.com/report-search/equities"
+            data = await self.client.get_json(url, referer=referer, warmup=warmup)
             deals = data.get("data", []) if data else []
             
             # Resolve actual data date from the first row if available
