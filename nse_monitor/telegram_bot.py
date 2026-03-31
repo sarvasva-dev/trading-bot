@@ -91,8 +91,12 @@ class TelegramBot:
         """Ensures all JSON IDs are also persisted in the SQLite users table."""
         if not self.db: return
         logger.info("Syncing User Database...")
+        try:
+            self.db.cleanup_legacy_names()
+        except Exception:
+            pass
         for chat_id in self.chat_ids:
-            self.db.save_user(chat_id, "Sync_Legacy", "Legacy")
+            self.db.ensure_user(chat_id)
 
     def _save_dynamic_ids(self, chat_id=None, first_name=None, username=None):
         """Saves a new user to both JSON and DB (Rule #24)."""
@@ -125,6 +129,11 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Async bridge error: {e}")
             return None
+
+    def _clean_name(self, name):
+        if not name or name in ("Sync_Legacy", "Legacy", "manual_entry", "Unknown"):
+            return "User"
+        return name
 
     def handle_updates(self):
         """Checks for new messages and handles commands via Long Polling."""
@@ -249,6 +258,7 @@ class TelegramBot:
             return
 
         uid, name, uname, active, days = user
+        name = self._clean_name(name)
 
         # v1.0: Accurate expiry — calendar walk
         try:
@@ -304,6 +314,7 @@ class TelegramBot:
         
         if user and user[4] > 0: # If has active credits, show Dashboard
             uid, name, uname, active, days = user
+            name = self._clean_name(name)
             
             # Calculate Expiry
             tz = pytz.timezone("Asia/Kolkata")
@@ -436,6 +447,7 @@ class TelegramBot:
         msg += "────────────────────────\n"
         for u in users:
             uid, name, uname, active, days = u
+            name = self._clean_name(name)
             status = "✅" if active else "❌"
             # Format: [Status] Name | ID | Days
             msg += f"{status} {name or 'N/A'} (<code>{uid}</code>) | {days}d left\n"
@@ -520,62 +532,65 @@ class TelegramBot:
         self._send_raw(chat_id, f"✅ <b>Broadcast Sent!</b>\nDelivered to {sent} active subscribers.")
 
     def _handle_bulk_deals(self, chat_id):
-        """Fetches real-time NSE Bulk & Block Deal data (v12.0)."""
-        self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals from NSE...</b>")
+        """Fetches bulk deals and always replies (live or cached)."""
+        self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals...</b>")
         try:
             if not self.nse_client:
                 self._send_raw(chat_id, "❌ <b>NSE Client Error.</b>")
                 return
-                
-            # Correct Endpoint (Rule #22 Mastery)
-            url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
-            referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
-            
-            data = self._run_async(
-                self.nse_client.get_json(
-                    url,
-                    referer=referer,
-                    warmup="https://www.nseindia.com/report-search/equities",
+
+            now = datetime.now(self.ist)
+            date_str = now.strftime("%d-%m-%Y")
+            hist_url = f"https://www.nseindia.com/api/historicalOR/bulk-block-short-deals?optionType=bulk_deals&from={date_str}&to={date_str}"
+            hist_referer = "https://www.nseindia.com/report-detail/display-bulk-and-block-deals"
+            data = self._run_async(self.nse_client.get_json(hist_url, referer=hist_referer))
+            deals = data.get("data", []) if data else []
+
+            if not deals:
+                live_url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
+                live_referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
+                live_data = self._run_async(
+                    self.nse_client.get_json(live_url, referer=live_referer, warmup="https://www.nseindia.com/report-search/equities")
                 )
-            )
-            if not data:
-                # Always provide useful fallback, even when API is unavailable/market closed
-                fallback_items = []
+                if live_data:
+                    deals = live_data.get("data", [])
+
+            if not deals:
+                cached = []
                 if self.db:
-                    fallback_items = [n for n in self.db.get_recent_news(hours=72) if n.get("source") == "NSE_BULK"][:6]
-                if not fallback_items:
-                    self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>Live NSE bulk feed unavailable right now. No recent cached bulk deals found.</i>")
+                    cached = [n for n in self.db.get_recent_news(hours=72) if n.get("source") == "NSE_BULK"][:8]
+                if not cached:
+                    self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>No live trades reported and no recent cache found.</i>")
                     return
-                msg = "📊 <b>BULK DEALS (Recent Cached)</b>\n────────────────────────\n"
-                for n in fallback_items:
+                msg = "📊 <b>BULK DEALS (Cached)</b>\n────────────────────────\n"
+                for n in cached:
                     msg += f"• <b>{n.get('symbol','N/A')}</b> | {n.get('headline','N/A')[:90]}\n"
                 msg += "\n⚖️ <i>Non-SEBI Educational Resource</i>"
                 self._send_raw(chat_id, msg)
                 return
-                
-            deals = data.get("data", [])
-            
-            if not deals:
-                self._send_raw(chat_id, "📊 <b>Bulk Deals</b>\n<i>No bulk deals reported in current live feed. Try again later; cached summary remains available.</i>")
-                return
-            
+
             msg = "📊 <b>TODAY'S BULK DEALS</b>\n────────────────────────\n"
-            for d in deals[:8]:  # Max 8 deals
-                symbol = d.get("symbol", "N/A")
-                client = d.get("clientName", "N/A")
-                qty = d.get("quantityTraded", 0)
-                price = d.get("tradePrice", 0)
-                bos = d.get("buySellFlag", "")
-                icon = "🟢" if bos == "BUY" else "🔴"
-                msg += f"{icon} <b>{symbol}</b> | {bos}\n"
-                msg += f"   Client: {client}\n"
-                msg += f"   Qty: {qty:,} @ ₹{price}\n\n"
-            
+            for d in deals[:10]:
+                if "BD_SYMBOL" in d:
+                    qty = str(d.get("BD_QTY_TRD", "0")).replace(",", "")
+                    icon = "🟢" if d.get("BD_BUY_SELL") == "BUY" else "🔴"
+                    msg += f"{icon} <b>{d.get('BD_SYMBOL')}</b> | {d.get('BD_BUY_SELL')}\n"
+                    msg += f"   Client: {d.get('BD_CLIENT_NAME')}\n"
+                    msg += f"   Qty: {int(float(qty)):,} @ ₹{d.get('BD_TP_WATP')}\n\n"
+                else:
+                    qty = d.get("quantityTraded", 0)
+                    price = d.get("tradePrice", 0)
+                    bos = d.get("buySellFlag", "")
+                    icon = "🟢" if bos == "BUY" else "🔴"
+                    msg += f"{icon} <b>{d.get('symbol')}</b> | {bos}\n"
+                    msg += f"   Client: {d.get('clientName')}\n"
+                    msg += f"   Qty: {qty:,} @ ₹{price}\n\n"
+
             msg += "⚖️ <i>Non-SEBI Educational Resource</i>"
             self._send_raw(chat_id, msg)
         except Exception as e:
             logger.error(f"Bulk deals fetch error: {e}")
-            self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>\nTry again during market hours (9:15 AM - 3:30 PM).")
+            self._send_raw(chat_id, "❌ <b>NSE data temporarily unavailable.</b>")
 
     def _handle_upcoming(self, chat_id):
         """Fetches NSE Corporate Action Calendar (v12.0)."""

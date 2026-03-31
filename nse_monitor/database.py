@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 import os
 import logging
 import threading
@@ -23,7 +23,7 @@ class Database:
             self._migrate_schema()
         except sqlite3.DatabaseError as e:
             if "malformed" in str(e).lower():
-                logger.error(f"❌ DATABASE CORRUPTED: {e}. Initiating auto-rescue...")
+                logger.error(f"âŒ DATABASE CORRUPTED: {e}. Initiating auto-rescue...")
                 self._handle_malformed()
             else:
                 raise e
@@ -37,15 +37,15 @@ class Database:
             if hasattr(self, 'conn') and self.conn:
                 self.conn.close()
             shutil.move(DB_PATH, backup_path)
-            logger.warning(f"⚠️ Corrupted DB moved to {backup_path}")
+            logger.warning(f"âš ï¸ Corrupted DB moved to {backup_path}")
             # Re-init
             self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             self.lock = threading.Lock()
             self._create_table()
             self._migrate_schema()
-            logger.info("✅ Database reset successfully. Re-ingest starting...")
+            logger.info("âœ… Database reset successfully. Re-ingest starting...")
         except Exception as ex:
-            logger.critical(f"🔥 FATAL: Database recovery failed: {ex}")
+            logger.critical(f"ðŸ”¥ FATAL: Database recovery failed: {ex}")
 
     def _create_table(self):
         with self.conn:
@@ -64,7 +64,7 @@ class Database:
                 )
             """)
 
-            # Unified table for all news sources (v1.0 — Zero-Loss Queue)
+            # Unified table for all news sources (v1.0 â€” Zero-Loss Queue)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS news_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +120,7 @@ class Database:
                 )
             """)
 
-            # Billing Audit Trail (v2.0 — Transparency)
+            # Billing Audit Trail (v2.0 â€” Transparency)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_billing_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +144,7 @@ class Database:
                 )
             """)
             
-            # System Config table (v2.0 — Live Admin Controls)
+            # System Config table (v2.0 â€” Live Admin Controls)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS system_config (
                     key TEXT PRIMARY KEY,
@@ -194,17 +194,17 @@ class Database:
             cursor.execute("PRAGMA table_info(news_items)")
             columns = [row[1] for row in cursor.fetchall()]
             if 'processing_status' not in columns:
-                logger.warning("🔄 Upgrading Database: Adding 'processing_status' column to news_items...")
+                logger.warning("ðŸ”„ Upgrading Database: Adding 'processing_status' column to news_items...")
                 self.conn.execute("ALTER TABLE news_items ADD COLUMN processing_status INTEGER DEFAULT 0")
 
             # v4.0: instrumented auto-migration for alert_dispatch_log
             cursor.execute("PRAGMA table_info(alert_dispatch_log)")
             columns = [row[1] for row in cursor.fetchall()]
             if 'trigger_class' not in columns:
-                logger.warning("🔄 Upgrading Database: Adding 'trigger_class' to alert_dispatch_log...")
+                logger.warning("ðŸ”„ Upgrading Database: Adding 'trigger_class' to alert_dispatch_log...")
                 self.conn.execute("ALTER TABLE alert_dispatch_log ADD COLUMN trigger_class TEXT")
             if 'accuracy_score' not in columns:
-                logger.warning("🔄 Upgrading Database: Adding 'accuracy_score' to alert_dispatch_log...")
+                logger.warning("ðŸ”„ Upgrading Database: Adding 'accuracy_score' to alert_dispatch_log...")
                 self.conn.execute("ALTER TABLE alert_dispatch_log ADD COLUMN accuracy_score REAL")
 
             # v1.0 Performance Indexes
@@ -473,13 +473,30 @@ class Database:
             
             if not user:
                 # New user: Give 2 free market days
-                logger.info(f"🆕 NEW USER REGISTERED: {first_name} ({chat_id}) | Source: {source} | Credited 2-day trial.")
+                logger.info(f"ðŸ†• NEW USER REGISTERED: {first_name} ({chat_id}) | Source: {source} | Credited 2-day trial.")
                 self.conn.execute("""
                     INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active, source_tag)
                     VALUES (?, ?, ?, 2, 1, 1, ?)
                 """, (str(chat_id), first_name, username, source))
                 return True # New registration
             return False
+
+    
+    def ensure_user(self, chat_id):
+        """Ensure a user row exists without overwriting names."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO users (id, first_name, username, is_active, working_days_left)
+                   VALUES (?, 'User', '', 0, 0)""",
+                (str(chat_id),)
+            )
+
+    def cleanup_legacy_names(self):
+        """Normalize placeholder names so UI doesn't show Sync_Legacy."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE users SET first_name = 'User' WHERE first_name IN ('Sync_Legacy','Legacy','manual_entry','Unknown')"
+            )
 
     def get_user_count(self):
         """Returns the total number of unique users."""
@@ -578,7 +595,7 @@ class Database:
         return [row[0] for row in cursor.fetchall()]
 
     def get_expiring_soon_users(self):
-        """Fetches users with exactly 1 day left — for 24h pre-expiry reminders."""
+        """Fetches users with exactly 1 day left â€” for 24h pre-expiry reminders."""
         cursor = self.conn.cursor()
         cursor.execute("SELECT id, first_name FROM users WHERE working_days_left = 1 AND is_active = 1")
         return cursor.fetchall()
@@ -658,7 +675,7 @@ class Database:
                 (key, str(value))
             )
 
-    # ── v2.0: Admin Session Management ────────────────────────────────────
+    # â”€â”€ v2.0: Admin Session Management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def set_admin_session(self, chat_id):
         """Creates or updates a persistent admin session."""
         with self.conn:
@@ -731,7 +748,7 @@ class Database:
             )
             deleted_logs = cursor.rowcount
             
-            logger.info(f"🧹 Hygiene: Purged {deleted_news} old news items and {deleted_logs} logs.")
+            logger.info(f"ðŸ§¹ Hygiene: Purged {deleted_news} old news items and {deleted_logs} logs.")
             return deleted_news
 
     def get_user(self, chat_id):
@@ -830,7 +847,7 @@ class Database:
             
             # Update last backup time (Persistent)
             self.set_config("last_backup", str(time.time()))
-            logger.info(f"✅ Institutional Backup Complete: {os.path.basename(backup_file)}")
+            logger.info(f"âœ… Institutional Backup Complete: {os.path.basename(backup_file)}")
             
             # Clean up old backups (keep last 5)
             backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")])
@@ -839,7 +856,7 @@ class Database:
                     os.remove(b)
             return True
         except Exception as e:
-            logger.error(f"❌ Database backup failure: {e}")
+            logger.error(f"âŒ Database backup failure: {e}")
             return False
 
     def needs_backup(self):
@@ -861,3 +878,4 @@ class Database:
             "headline": row[3], "summary": row[4], "url": row[5],
             "impact_score": row[10], "sentiment": row[11]
         }
+
