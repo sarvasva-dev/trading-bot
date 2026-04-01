@@ -16,6 +16,9 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# Keep model pinned to 30B unless an intentional code change is made.
+SARVAM_MODEL = "sarvam-30b"
+
 # ── INSTITUTIONAL PROMPT TEMPLATE (v1.0) ──────────────────────────────────────
 INSTITUTIONAL_PROMPT = """
 ROLE: Lead Quantitative Strategist, NSE Institutional Desk (Top-Tier Hedge Fund)
@@ -223,7 +226,7 @@ class LLMProcessor:
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "sarvam-30b",
+          "model": SARVAM_MODEL,
             "messages": [
                 {
                     "role": "system",

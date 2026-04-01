@@ -14,18 +14,13 @@ class BulkDealSource:
     def __init__(self, nse_client=None):
         self.client = nse_client or NSEClient()
 
-    async def _fetch_live_deals(self):
-        url = "https://www.nseindia.com/api/live-analysis-bulk-deal"
-        referer = "https://www.nseindia.com/report-search/equities?id=all-daily-reports"
-        warmup = "https://www.nseindia.com/report-search/equities"
-        data = await self.client.get_json(url, referer=referer, warmup=warmup)
-        return data.get("data", []) if data else []
-
     async def fetch(self):
         """Fetches real-time Bulk & Block deals (Async)."""
         if not self.client: return []
         tz = pytz.timezone("Asia/Kolkata")
         now = datetime.now(tz)
+        
+        # v7.0: Market Hour Gate
         if not (9 <= now.hour < 16 and now.weekday() < 5): return []
 
         try:
@@ -35,24 +30,19 @@ class BulkDealSource:
             
             data = await self.client.get_json(url, referer=referer)
             deals = data.get("data", []) if data else []
-            if not deals:
-                deals = await self._fetch_live_deals()
             results = []
 
             for deal in deals:
-                if "BD_SYMBOL" in deal:
-                    symbol = deal.get("BD_SYMBOL", "N/A")
-                    qty = deal.get("BD_QTY_TRD", 0) or 0
-                    price = deal.get("BD_TP_WATP", 0) or 0
-                    name = deal.get("BD_CLIENT_NAME", "Unknown")
-                    bs = deal.get("BD_BUY_SELL", "BUY")
-                else:
-                    symbol = deal.get("symbol", "N/A")
-                    qty = deal.get("quantityTraded", 0) or 0
-                    price = deal.get("tradePrice", 0) or 0
-                    name = deal.get("clientName", "Unknown")
-                    bs = deal.get("buySellFlag", "BUY")
-                val_cr = (qty * price) / 1_00_00_000
+                # Key Mapping for historicalOR endpoint
+                symbol = deal.get("BD_SYMBOL", deal.get("symbol", "N/A"))
+                qty = deal.get("BD_QTY_TRD", deal.get("quantityTraded", 0)) or 0
+                price = deal.get("BD_TP_WATP", deal.get("tradePrice", 0)) or 0
+                name = deal.get("BD_CLIENT_NAME", deal.get("clientName", "Unknown"))
+                bs = deal.get("BD_BUY_SELL", deal.get("buySellFlag", "BUY"))
+                
+                try:
+                    val_cr = (float(qty) * float(price)) / 1_00_00_000
+                except: val_cr = 0
 
                 if val_cr < self.MIN_DEAL_VALUE_CR: continue
 
@@ -67,7 +57,9 @@ class BulkDealSource:
                     "sentiment": "Bullish" if bs == "BUY" else "Bearish"
                 })
             return results
-        except: return []
+        except Exception as e:
+            logger.error(f"Failed to fetch bulk deals: {e}")
+            return []
 
     async def get_deals_for_report(self):
         """v4.2.1: Normalized output with Freshness Gate (Truthful Recap)."""
@@ -80,31 +72,23 @@ class BulkDealSource:
             referer = "https://www.nseindia.com/report-detail/display-bulk-and-block-deals"
             data = await self.client.get_json(url, referer=referer)
             deals = data.get("data", []) if data else []
-            if not deals:
-                deals = await self._fetch_live_deals()
             
-            # Resolve actual data date from the first row if available
             actual_date_str = deals[0].get("BD_DT_DATE", "N/A") if deals else "N/A"
             is_stale = actual_date_str != expected_str
             
             results = []
             if not is_stale:
                 for d in deals:
-                    if "BD_SYMBOL" in d:
-                        qty = d.get("BD_QTY_TRD", 0) or 0
-                        price = d.get("BD_TP_WATP", 0) or 0
-                        symbol = d.get("BD_SYMBOL", "N/A")
-                        client = d.get("BD_CLIENT_NAME", "Unknown")
-                        buy_sell = d.get("BD_BUY_SELL", "BUY")
-                        trade_date = d.get("BD_DT_DATE", "N/A")
-                    else:
-                        qty = d.get("quantityTraded", 0) or 0
-                        price = d.get("tradePrice", 0) or 0
-                        symbol = d.get("symbol", "N/A")
-                        client = d.get("clientName", "Unknown")
-                        buy_sell = d.get("buySellFlag", "BUY")
-                        trade_date = d.get("date", "N/A")
-                    val_cr = (qty * price) / 1_00_00_000
+                    symbol = d.get("BD_SYMBOL", d.get("symbol", "N/A"))
+                    qty = d.get("BD_QTY_TRD", d.get("quantityTraded", 0)) or 0
+                    price = d.get("BD_TP_WATP", d.get("tradePrice", 0)) or 0
+                    client = d.get("BD_CLIENT_NAME", d.get("clientName", "Unknown"))
+                    buy_sell = d.get("BD_BUY_SELL", d.get("buySellFlag", "BUY"))
+                    trade_date = d.get("BD_DT_DATE", d.get("date", "N/A"))
+                    
+                    try:
+                        val_cr = (float(qty) * float(price)) / 1_00_00_000
+                    except: val_cr = 0
                     
                     results.append({
                         "symbol": symbol,
