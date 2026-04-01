@@ -17,29 +17,13 @@ class ProxyManager:
     """
     def __init__(self):
         self.proxies = []
-        self._refresh_proxies()
+        # Proxy layer is intentionally disabled; keep direct mode only.
+        logger.info("ProxyManager: Disabled (direct mode forced).")
 
     def _refresh_proxies(self):
         """Scrapes free public proxies originating exclusively from India (IN)."""
-        logger.info("ProxyManager: Fetching fresh Indian proxies...")
-        try:
-            # Explicitly filtering for Indian proxies ('country=IN')
-            url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=IN&ssl=all&anonymity=all"
-            r = requests.get(url, timeout=10)
-            
-            raw_proxies = r.text.strip().split("\r\n")
-            new_list = []
-            
-            for line in raw_proxies:
-                if ":" in line:
-                    new_list.append(f"http://{line}")
-            
-            # Keep top 30 active Indian proxies
-            self.proxies = new_list[:30]
-            logger.info(f"ProxyManager: Loaded {len(self.proxies)} Indian proxies.")
-            
-        except Exception as e:
-            logger.error(f"ProxyManager: Failed to refresh Indian proxies: {e}")
+        self.proxies = []
+        logger.info("ProxyManager: Refresh skipped (disabled).")
 
     def get_proxy(self):
         """
