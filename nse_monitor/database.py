@@ -890,10 +890,10 @@ class Database:
             self.set_config("last_backup", str(time.time()))
             logger.info(f"âœ… Institutional Backup Complete: {os.path.basename(backup_file)}")
             
-            # Clean up old backups (keep last 5)
+            # Clean up old backups (keep last 30 restore points)
             backups = sorted([os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".db")])
-            if len(backups) > 5:
-                for b in backups[:-5]:
+            if len(backups) > 30:
+                for b in backups[:-30]:
                     os.remove(b)
             return True
         except Exception as e:
