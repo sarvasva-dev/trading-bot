@@ -450,7 +450,8 @@ class TelegramBot:
         return (time.time() - session_time) < 300
 
     async def _send_raw(self, chat_id, text, reply_markup=None, disable_web_page_preview=False):
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "protect_content": True}
+        # v2.5: Changed protect_content to False to allow screenshots/forwarding
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "protect_content": False}
         if reply_markup: payload["reply_markup"] = reply_markup
         if disable_web_page_preview:
             payload["disable_web_page_preview"] = True
