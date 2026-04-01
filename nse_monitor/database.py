@@ -712,6 +712,8 @@ class Database:
             "active_trials": active_trials,
             "signals_today": signals
         }
+
+    def is_admin_session_valid(self, chat_id, timeout_minutes=43200):
         """Checks if an admin session is still valid."""
         cursor = self.conn.cursor()
         cursor.execute(

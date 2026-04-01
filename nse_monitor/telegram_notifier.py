@@ -14,6 +14,23 @@ class TelegramNotifier:
         self.admin_id = TELEGRAM_ADMIN_CHAT_ID
         self.base_url = f"https://api.telegram.org/bot{self.token}/sendMessage"
 
+    def _repair_mojibake_text(self, value):
+        if not isinstance(value, str) or not value:
+            return value
+        markers = ("Ã", "Â", "â", "ðŸ", "ï¸")
+        repaired = value
+        for _ in range(2):
+            if not any(marker in repaired for marker in markers):
+                break
+            try:
+                candidate = repaired.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                break
+            if not candidate or candidate == repaired:
+                break
+            repaired = candidate
+        return repaired
+
     def send_failure_alert(self, subject, error_message):
         """Sends a critical alert directly to the admin."""
         if not self.token or not self.admin_id:
@@ -31,7 +48,7 @@ class TelegramNotifier:
         try:
             payload = {
                 "chat_id": self.admin_id,
-                "text": text,
+                "text": self._repair_mojibake_text(text),
                 "parse_mode": "HTML"
             }
             requests.post(self.base_url, json=payload, timeout=10)
@@ -46,7 +63,7 @@ class TelegramNotifier:
         try:
             payload = {
                 "chat_id": self.admin_id,
-                "text": status_msg,
+                "text": self._repair_mojibake_text(status_msg),
                 "parse_mode": "HTML"
             }
             # Use a slightly longer timeout for reliability

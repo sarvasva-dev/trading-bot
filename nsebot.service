@@ -7,10 +7,10 @@ Type=simple
 User=root
 # Change this path to your actual project directory on Ubuntu
 WorkingDirectory=/root/nse2
-# Ensure .env is loaded
-EnvironmentFile=/root/nse2/nse_monitor/.env
-# Use system python or venv python
-ExecStart=/usr/bin/python3 -m nse_monitor.main
+# Ensure env vars are loaded from project root .env
+EnvironmentFile=/root/nse2/.env
+# Use project virtualenv python for dependency consistency
+ExecStart=/root/nse2/.venv/bin/python -m nse_monitor.main
 
 # Self-Healing: Restart on failure AND normal exit (os._exit(0))
 Restart=always

@@ -698,6 +698,36 @@ class TelegramBot:
             
         return self._execute_request("sendMessage", payload)
 
+    def _repair_mojibake_text(self, value):
+        """Best-effort fix for UTF-8 text that was decoded as Latin-1/CP1252."""
+        if not isinstance(value, str) or not value:
+            return value
+
+        markers = ("Ã", "Â", "â", "ðŸ", "ï¸")
+        repaired = value
+
+        for _ in range(2):
+            if not any(marker in repaired for marker in markers):
+                break
+            try:
+                candidate = repaired.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                break
+            if not candidate or candidate == repaired:
+                break
+            repaired = candidate
+
+        return repaired
+
+    def _sanitize_payload(self, payload):
+        if isinstance(payload, str):
+            return self._repair_mojibake_text(payload)
+        if isinstance(payload, list):
+            return [self._sanitize_payload(item) for item in payload]
+        if isinstance(payload, dict):
+            return {k: self._sanitize_payload(v) for k, v in payload.items()}
+        return payload
+
     def send_admin_alert(self, text):
         """v1.3: Sends a critical system alert to the Administrator chat ID."""
         admin_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -713,6 +743,7 @@ class TelegramBot:
     def _execute_request(self, method, payload, retries=3):
         """Internal helper with 429 Rate-Limit resilience (v1.3)."""
         url = f"{self.base_url}/{method}"
+        payload = self._sanitize_payload(payload)
         for attempt in range(retries):
             try:
                 r = requests.post(url, json=payload, timeout=15)
@@ -764,6 +795,7 @@ class TelegramBot:
     def send_report(self, report_text):
         """Sends a structured pre-market report to active users."""
         if not self.token: return
+        report_text = self._repair_mojibake_text(report_text)
         
         active_users = self.db.get_active_users() if self.db else self.chat_ids
         for chat_id in active_users:
@@ -775,7 +807,7 @@ class TelegramBot:
                 "protect_content": True
             }
             try:
-                requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=20)
+                requests.post(f"{self.base_url}/sendMessage", json=self._sanitize_payload(payload), timeout=20)
             except Exception as e:
                 logger.error(f"Failed to send report to {chat_id}: {e}")
         logger.info(f"Broadcasted report to {len(active_users)} active users.")
@@ -823,7 +855,7 @@ class TelegramBot:
                 "protect_content": True
             }
             try:
-                r = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=15)
+                r = requests.post(f"{self.base_url}/sendMessage", json=self._sanitize_payload(payload), timeout=15)
                 if r.status_code == 200: success = True
             except Exception as e:
                 logger.error(f"Failed to send alert to {chat_id}: {e}")

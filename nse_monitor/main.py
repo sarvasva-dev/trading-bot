@@ -227,13 +227,13 @@ class MarketIntelligenceSystem:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get("https://api.telegram.org", timeout=10) as resp:
-                    if resp.status >= 500:
-                        logger.error("Health: Telegram network blocked/throttled [FAIL] (HTTP %s)", resp.status)
-                        logger.error(
-                            "Note: Text may intermittently work, but binary PDF uploads may fail in this environment."
+                    if resp.status != 200:
+                        logger.error("Health: Telegram network degraded [WARN] (HTTP %s)", resp.status)
+                        logger.warning(
+                            "Note: Text signals might work, but binary PDF uploads may fail or be throttled."
                         )
-                        return False
-                    logger.info("Health: Telegram network reachable [OK] (HTTP %s)", resp.status)
+                    else:
+                        logger.info("Health: Telegram network reachable [OK] (HTTP 200)")
         except Exception as exc:
             logger.error("Health: Telegram network blocked/throttled [FAIL] (%s)", exc)
             logger.error("Note: Text may intermittently work, but binary PDF uploads may fail in this environment.")
@@ -370,6 +370,14 @@ class MarketIntelligenceSystem:
             return False
 
         source_name = item.get("source", "")
+        # v4.3.2: Separate Ingestion (0.1 Cr) from Alerting (5.0 Cr)
+        if source_name == "NSE_BULK":
+            val = float(item.get("deal_value_cr", 0))
+            if val < 5.0:
+                logger.info("Bulk suppression: %s value ₹%s Cr < ₹5 Cr", symbol, val)
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
+
         if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
             logger.info("Media suppression: %s is ingest-only", symbol)
             self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)

@@ -38,6 +38,23 @@ class AdminPanel:
         self.last_update_id = 0
         self.session = None  # Created in run()
 
+    def _repair_mojibake_text(self, value):
+        if not isinstance(value, str) or not value:
+            return value
+        markers = ("Ã", "Â", "â", "ðŸ", "ï¸")
+        repaired = value
+        for _ in range(2):
+            if not any(marker in repaired for marker in markers):
+                break
+            try:
+                candidate = repaired.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                break
+            if not candidate or candidate == repaired:
+                break
+            repaired = candidate
+        return repaired
+
     async def _set_latest_offset(self):
         """Skip all stale messages on startup (Rule #24)."""
         try:
@@ -448,7 +465,7 @@ class AdminPanel:
         await self._notify_user_via_signal_bot(target_id, msg)
 
     async def _notify_user_via_signal_bot(self, user_id, text):
-        payload = {"chat_id": user_id, "text": text, "parse_mode": "HTML"}
+        payload = {"chat_id": user_id, "text": self._repair_mojibake_text(text), "parse_mode": "HTML"}
         try:
             async with self.session.post(f"{self.signal_bot_url}/sendMessage", json=payload, timeout=5) as resp:
                 await resp.text()
@@ -471,7 +488,7 @@ class AdminPanel:
         await self._send(chat_id, f"Broadcast sent to {count} users.")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False):
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        payload = {"chat_id": chat_id, "text": self._repair_mojibake_text(text), "parse_mode": "HTML"}
         if keyboard: payload["reply_markup"] = keyboard
         url = self.broadcast_url if use_signal_bot else f"{self.base_url}/sendMessage"
         try:
