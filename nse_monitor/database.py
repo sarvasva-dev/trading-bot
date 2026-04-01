@@ -1,5 +1,6 @@
 ﻿import sqlite3
 import os
+import glob
 import logging
 import threading
 import pytz
@@ -38,7 +39,17 @@ class Database:
                 self.conn.close()
             shutil.move(DB_PATH, backup_path)
             logger.warning(f"âš ï¸ Corrupted DB moved to {backup_path}")
-            # Re-init
+
+            # Prefer restoring the latest healthy backup to preserve users/subscriptions.
+            if self._restore_latest_backup():
+                self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                self.lock = threading.Lock()
+                self._create_table()
+                self._migrate_schema()
+                logger.info("âœ… Database restored from backup successfully.")
+                return
+
+            # Last fallback: create fresh DB if no valid backup exists.
             self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             self.lock = threading.Lock()
             self._create_table()
@@ -46,6 +57,34 @@ class Database:
             logger.info("âœ… Database reset successfully. Re-ingest starting...")
         except Exception as ex:
             logger.critical(f"ðŸ”¥ FATAL: Database recovery failed: {ex}")
+
+    def _restore_latest_backup(self):
+        """Restores DB_PATH from the newest valid backup snapshot, if available."""
+        import shutil
+        backup_dir = os.path.join(os.path.dirname(DB_PATH), "backups")
+        candidates = sorted(glob.glob(os.path.join(backup_dir, "pulse_backup_*.db")), reverse=True)
+
+        for candidate in candidates:
+            try:
+                with sqlite3.connect(candidate) as test_conn:
+                    status = test_conn.execute("PRAGMA integrity_check").fetchone()[0]
+                    if status != "ok":
+                        continue
+
+                    has_users = test_conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+                    ).fetchone()
+                    if not has_users:
+                        continue
+
+                shutil.copy2(candidate, DB_PATH)
+                logger.warning(f"âš ï¸ Restored database from backup: {candidate}")
+                return True
+            except Exception as ex:
+                logger.warning(f"Backup candidate rejected ({candidate}): {ex}")
+
+        logger.error("No valid backup found for malformed DB auto-restore.")
+        return False
 
     def _create_table(self):
         with self.conn:
