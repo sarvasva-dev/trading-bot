@@ -5,7 +5,6 @@ import fitz  # PyMuPDF
 import random
 import time
 from nse_monitor.config import DOWNLOADS_DIR, HEADERS, USER_AGENTS
-from nse_monitor.proxy_manager import ProxyManager
 
 try:
     import pytesseract
@@ -29,7 +28,6 @@ class PDFProcessor:
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self.archive_base = "https://nsearchives.nseindia.com/corporate/"
-        self.proxy_mgr = ProxyManager()
 
     def download_pdf(self, pdf_url, retries=3):
         """Downloads a PDF with retries and UA rotation to bypass blocks."""
@@ -52,14 +50,12 @@ class PDFProcessor:
             if attempt == 0:
                 time.sleep(random.uniform(3, 7))
             
-            proxy = self.proxy_mgr.get_proxy()
             try:
                 # Rotate User-Agent on each attempt
                 ua = random.choice(USER_AGENTS)
                 self.session.headers.update({"User-Agent": ua})
                 
                 logger.info(f"Downloading PDF (Attempt {attempt+1}/{retries}): {pdf_url}")
-                if proxy: logger.debug(f"Using Proxy for PDF: {proxy['http']}")
                 
                 # v1.4.2: Direct Mode (Bypassing Proxies for stability)
                 # Use a fresh landing page visit to stabilize session if needed
@@ -75,8 +71,7 @@ class PDFProcessor:
                 return local_path
 
             except Exception as e:
-                logger.warning(f"Download attempt {attempt+1} failed with proxy {proxy}: {e}")
-                self.proxy_mgr.remove_dead_proxy(proxy)
+                logger.warning(f"Download attempt {attempt+1} failed: {e}")
                 if attempt < retries - 1:
                     wait_time = random.uniform(2, 5) * (attempt + 1)
                     time.sleep(wait_time)
