@@ -87,7 +87,7 @@ class AdminPanel:
         return self.db.is_admin_session_valid(cid, timeout_minutes=ADMIN_SESSION_TIMEOUT_MINUTES)
 
     async def run(self):
-        logger.info(f"--- {BOT_NAME} ADMIN PANEL ONLINE (ASYNC) ---")
+        logger.info(f"--- {BOT_NAME} | Follow the Beat of Big Money | ADMIN ONLINE ---")
         if self.owner_id:
             logger.info(f"Owner Auto-Login: {self.owner_id}")
         
@@ -375,7 +375,7 @@ class AdminPanel:
             f"<b>Total Users:</b> {total}\n"
             f"<b>Active Subs:</b> {active}\n"
             f"------------------------------\n"
-            f"<i>Build: Bulkbeat TV Pro</i>"
+            f"<i>Bulkbeat TV — Follow the Beat of Big Money News with Smart Money</i>"
         )
         await self._send(chat_id, text)
 

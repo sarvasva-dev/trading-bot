@@ -165,8 +165,8 @@ class TelegramBot:
 
                             if is_new:
                                 await self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
-                                                      "Welcome to the Bulkbeat TV Institutional Engine. "
-                                                      "As a new user, you've been granted <b>2 Free Market-Days</b>.")
+                                                      "⚡ <b>Follow the Beat of Big Money News with Smart Money.</b>\n"
+                                      "As a new user, you've been granted <b>2 Free Market-Days</b>.")
 
                             # Command Router
                             if text.startswith("/start"):
@@ -288,7 +288,8 @@ class TelegramBot:
         user = self.db.get_user(chat_id)
         
         intro = (
-            f"🏛️ <b>{BOT_NAME} Institutional Engine</b>\n\n"
+            f"🏛️ <b>{BOT_NAME} Institutional Engine</b>\n"
+            f"<i>Follow the Beat of Big Money News with Smart Money</i>\n\n"
             f"Welcome, {first_name}. You are connected to a high-precision NSE intelligence system. "
             f"Our engine scans institutional filings in real-time to identify high-impact market signals.\n"
         )

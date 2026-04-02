@@ -151,7 +151,10 @@ class MarketIntelligenceSystem:
         self.memory_lock = asyncio.Lock()
         self.notifier = TelegramNotifier()
         self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
-        logger.info("System initialized. Async core online.")
+        logger.info("================================================")
+        logger.info("  Bulkbeat TV — Follow the Beat of Big Money")
+        logger.info("  Smart Money Intelligence Engine v2.0 ONLINE")
+        logger.info("================================================")
 
     async def start_background_tasks(self):
         await self.bot.initialize()

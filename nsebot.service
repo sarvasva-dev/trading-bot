@@ -1,5 +1,5 @@
 [Unit]
-Description=Market Pulse v1.0 Intelligence Engine
+Description=Bulkbeat TV — Smart Money Intelligence Engine
 After=network.target
 
 [Service]
