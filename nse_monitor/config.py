@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 START_TIME = time.time()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
-load_dotenv(os.path.join(ROOT_DIR, ".env"))
+load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
 
 # 2. NSE & Bot Identity
 NSE_BASE_URL = "https://www.nseindia.com"
