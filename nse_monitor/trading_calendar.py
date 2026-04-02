@@ -32,7 +32,7 @@ NSE_HOLIDAYS = _load_holidays()
 
 class TradingCalendar:
     """
-    Central calendar engine for Market Pulse v1.0.
+    Central calendar engine for Bulkbeat TV v1.0.
     All credit deduction and expiry calculation goes through here.
     """
 

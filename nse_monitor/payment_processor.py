@@ -38,7 +38,7 @@ class RazorpayProcessor:
                 "first_min_partial_amount": 0,
                 "expire_by": int((datetime.now() + timedelta(days=1)).timestamp()),
                 "reference_id": f"SUB_{chat_id}_{plan_type}_{int(datetime.now().timestamp())}",
-                "description": f"Market Pulse {plan['label']} Access",
+                "description": f"Bulkbeat TV {plan['label']} Access",
                 "customer": {"name": first_name, "contact": "", "email": ""},
                 "notify": {"sms": False, "email": False},
                 "reminder_enable": False,

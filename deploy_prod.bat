@@ -1,6 +1,6 @@
 @echo off
 echo =========================================================
-echo    Market Pulse v1.0 - Production Deploy
+echo    Bulkbeat TV v1.0 - Production Deploy
 echo =========================================================
 echo.
 
@@ -32,12 +32,12 @@ IF NOT EXIST .env (
 
 echo.
 echo =========================================================
-echo SUCCESS! Starting Market Pulse...
+echo SUCCESS! Starting Bulkbeat TV...
 echo =========================================================
 echo Note: This window will stay open to show output if run directly.
 echo To run entirely hidden, schedule this batch file via Task Scheduler.
 echo.
 
-title Market Pulse v1.0
+title Bulkbeat TV v1.0
 python v7_launcher.py
 pause

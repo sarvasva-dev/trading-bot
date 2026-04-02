@@ -6,11 +6,33 @@ import os
 import json
 import pytz
 import time
+import bcrypt
+from collections import defaultdict
 from datetime import datetime, timedelta
-from nse_monitor.config import BOT_NAME, ADMIN_PASSWORD, TELEGRAM_DOCUMENT_TIMEOUT_SEC, HEADERS
+from nse_monitor.config import BOT_NAME, ADMIN_SESSION_TIMEOUT_MINUTES, TELEGRAM_DOCUMENT_TIMEOUT_SEC, HEADERS
 from nse_monitor.payment_processor import RazorpayProcessor
 
 logger = logging.getLogger(__name__)
+# v2.0: Brute-force and Spam Protection tracking
+user_command_times = defaultdict(list)
+failed_logins = defaultdict(lambda: {'count': 0, 'locked_until': 0})
+
+def rate_limit(max_calls=5, period=60):
+    """Decorator to limit command frequency per chat_id."""
+    def decorator(func):
+        async def wrapper(self, chat_id, *args, **kwargs):
+            now = time.time()
+            # Clean old entries
+            user_command_times[chat_id] = [t for t in user_command_times[chat_id] if now - t < period]
+            
+            if len(user_command_times[chat_id]) >= max_calls:
+                await self._send_raw(chat_id, "⏳ <b>Too many requests.</b> Please wait a minute.")
+                return
+                
+            user_command_times[chat_id].append(now)
+            return await func(self, chat_id, *args, **kwargs)
+        return wrapper
+    return decorator
 
 class TelegramBot:
     def __init__(self, db=None, nse_client=None):
@@ -143,7 +165,7 @@ class TelegramBot:
 
                             if is_new:
                                 await self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
-                                                      "Welcome to the Market Pulse Institutional Engine. "
+                                                      "Welcome to the Bulkbeat TV Institutional Engine. "
                                                       "As a new user, you've been granted <b>2 Free Market-Days</b>.")
 
                             # Command Router
@@ -173,6 +195,8 @@ class TelegramBot:
                                 await self._handle_upcoming(chat_id)
                             elif text == "/status":
                                 await self._handle_status(chat_id)
+                            elif text.startswith("/login"):
+                                await self._handle_login(chat_id, text, msg["message_id"])
                             elif text == "/admin":
                                 await self._send_raw(chat_id, "🔐 <b>Admin Dashboard (Interactive)</b>\nPlease use the dedicated Admin Bot.")
                             
@@ -180,10 +204,17 @@ class TelegramBot:
                                 if text.startswith("/grant"):
                                     parts = text.split()
                                     if len(parts) >= 3:
-                                        target, days = parts[1], parts[2]
-                                        self.db.add_working_days(target, int(days))
-                                        self.db.toggle_user_status(target, 1)
-                                        await self._send_raw(chat_id, f"✅ User {target} granted {days} days.")
+                                        target, days_str = parts[1], parts[2]
+                                        try:
+                                            days = int(days_str)
+                                            if not (1 <= days <= 365):
+                                                await self._send_raw(chat_id, "❌ <b>Error:</b> Range must be 1-365 days.")
+                                            else:
+                                                self.db.add_working_days(target, days)
+                                                self.db.toggle_user_status(target, 1)
+                                                await self._send_raw(chat_id, f"✅ User {target} granted {days} days.")
+                                        except ValueError:
+                                            await self._send_raw(chat_id, "❌ <b>Error:</b> Days must be a number.")
                                 elif text == "/users":
                                     stats = self.db.get_user_stats()
                                     await self._send_raw(chat_id, f"👥 Total: {stats[0]} | Active: {stats[1]}")
@@ -207,6 +238,8 @@ class TelegramBot:
                 logger.error(f"Failed to handle Telegram updates: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
+
+    @rate_limit(max_calls=10, period=60)
     async def _handle_plan(self, chat_id, first_name):
         """v1.0: Precise expiry using TradingCalendar instead of guesswork."""
         user = self.db.get_user(chat_id)
@@ -336,6 +369,7 @@ class TelegramBot:
         msg += "💡 Select a plan above to generate a secure payment link."
         return msg
 
+    @rate_limit(max_calls=5, period=60)
     async def _handle_subscribe_menu(self, chat_id):
         """Displays available plans to the user."""
         await self._send_raw(chat_id, self._get_plan_menu())
@@ -351,30 +385,63 @@ class TelegramBot:
         msg += self._get_plan_menu()
         await self._send_raw(chat_id, msg)
 
-    async def _handle_login(self, chat_id, text):
+    @rate_limit(max_calls=3, period=60) # Strict rate limit for login attempts
+    async def _handle_login(self, chat_id, text, message_id):
+        from nse_monitor.config import ADMIN_PASSWORD_HASH
+        
+        # RULE: Delete the message immediately to prevent plaintext in history.
+        await self._execute_request("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+        
+        now = time.time()
+        lock_info = failed_logins[str(chat_id)]
+        if lock_info['locked_until'] > now:
+            wait_sec = int(lock_info['locked_until'] - now)
+            await self._send_raw(chat_id, f"🔒 <b>Security Lockout:</b> Too many failed attempts. Try again in {wait_sec} seconds.")
+            return
+
         parts = text.split()
         if len(parts) < 2:
             await self._send_raw(chat_id, "❌ Usage: <code>/login <password></code>")
             return
             
         provided_password = parts[1]
-        if provided_password == ADMIN_PASSWORD:
+        
+        # v2.0: Secure Bcrypt Verification
+        if not ADMIN_PASSWORD_HASH:
+            await self._send_raw(chat_id, "⚠️ <b>System Error:</b> ADMIN_PASSWORD_HASH not configured in environment.")
+            return
+
+        try:
+            is_valid = bcrypt.checkpw(provided_password.encode('utf-8'), ADMIN_PASSWORD_HASH.encode('utf-8'))
+        except Exception as e:
+            logger.error(f"Bcrypt verification error: {e}")
+            is_valid = False
+
+        if is_valid:
+            failed_logins[str(chat_id)] = {'count': 0, 'locked_until': 0} # Reset on success
             self.admin_sessions[str(chat_id)] = time.time()
-            await self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b>")
+            await self._send_raw(chat_id, "🔓 <b>Admin Authentication Successful.</b> Session active for 60 minutes.")
         else:
-            await self._send_raw(chat_id, "🚫 <b>Invalid Password.</b>")
+            failed_logins[str(chat_id)]['count'] += 1
+            if failed_logins[str(chat_id)]['count'] >= 3:
+                failed_logins[str(chat_id)]['locked_until'] = now + 900 # 15 min lock
+                await self._send_raw(chat_id, "🚨 <b>3 Failures Reached.</b> 15-minute security lockout initiated.")
+            else:
+                remaining = 3 - failed_logins[str(chat_id)]['count']
+                await self._send_raw(chat_id, f"🚫 <b>Invalid Password.</b> {remaining} attempts remaining.")
 
     async def _handle_logout(self, chat_id):
         if str(chat_id) in self.admin_sessions:
             del self.admin_sessions[str(chat_id)]
             await self._send_raw(chat_id, "🔒 <b>Logged Out.</b>")
 
+    @rate_limit(max_calls=10, period=60)
     async def _handle_status(self, chat_id):
         """v1.0: Live System Diagnostic — tests AI, NSE, DB, and RAM in real-time."""
         if not self.is_admin(chat_id): return
         
         await self._send_raw(chat_id, "🔍 <b>Running system diagnostics...</b>")
-        lines = ["📊 <b>MARKET PULSE — SYSTEM STATUS</b>", "────────────────────────"]
+        lines = ["📊 <b>BULKBEAT TV — SYSTEM STATUS</b>", "────────────────────────"]
 
         # 1. NSE Connectivity (Using actual BOT session)
         try:
@@ -407,13 +474,14 @@ class TelegramBot:
         lines.append("<i>v1.0 Industrial Engine | Non-SEBI</i>")
         await self._send_raw(chat_id, "\n".join(lines))
 
+    @rate_limit(max_calls=5, period=60)
     async def _handle_plan_selection(self, chat_id, text, first_name):
         """Generates link for selected plan and saves for auto-verification."""
         plan_type = text.replace("/sub_", "")
         await self._send_raw(chat_id, f"⌛ <b>Generating secure payment link for ₹{plan_type}...</b>")
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             link_data = await loop.run_in_executor(None, lambda: self.payment_processor.create_payment_link(chat_id, plan_type, first_name))
             
             if link_data:
@@ -425,6 +493,7 @@ class TelegramBot:
             logger.error(f"Link generation failed: {e}")
             await self._send_raw(chat_id, "⚠️ System Error. Please contact support.")
 
+    @rate_limit(max_calls=5, period=60)
     async def _handle_manual_verify(self, chat_id):
         pending = self.db.get_pending_payment_links()
         user_pending = [p for p in pending if str(p[1]) == str(chat_id)]
@@ -434,9 +503,10 @@ class TelegramBot:
         link_id = user_pending[-1][0]
         await self._handle_check_payment(chat_id, link_id)
 
+    @rate_limit(max_calls=10, period=60)
     async def _handle_check_payment(self, chat_id, link_id):
         if not link_id: return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         days_to_add = await loop.run_in_executor(None, lambda: self.payment_processor.verify_payment_status(link_id))
         if days_to_add:
             self.db.add_working_days(chat_id, days_to_add)
@@ -447,7 +517,7 @@ class TelegramBot:
 
     def is_admin(self, chat_id):
         session_time = self.admin_sessions.get(str(chat_id), 0)
-        return (time.time() - session_time) < 300
+        return (time.time() - session_time) < (ADMIN_SESSION_TIMEOUT_MINUTES * 60)
 
     async def _send_raw(self, chat_id, text, reply_markup=None, disable_web_page_preview=False):
         # v2.5: Changed protect_content to False to allow screenshots/forwarding
@@ -545,6 +615,7 @@ class TelegramBot:
             await asyncio.sleep(0.05)
         return True
 
+    @rate_limit(max_calls=10, period=60)
     async def _handle_history(self, chat_id):
         """Displays user's successful payment history (v12.0)."""
         history = self.db.get_user_payment_history(chat_id)
@@ -569,9 +640,10 @@ class TelegramBot:
             msg += f"   📅 {date_ts}\n\n"
         
         msg += "────────────────────────\n"
-        msg += "📈 <i>Thank you for choosing Market Pulse Professional.</i>"
+        msg += "📈 <i>Thank you for choosing Bulkbeat TV Professional.</i>"
         await self._send_raw(chat_id, msg)
 
+    @rate_limit(max_calls=5, period=60)
     async def _handle_billing_history(self, chat_id):
         """Displays the 'Hisab' audit trail for the user (v2.0)."""
         logs = self.db.get_billing_logs(chat_id, limit=8)
@@ -601,6 +673,7 @@ class TelegramBot:
         msg += "⚖️ <i>Internal Ledger transparency verified.</i>"
         await self._send_raw(chat_id, msg)
 
+    @rate_limit(max_calls=5, period=120) # Stricter limit for heavy NSE scraping
     async def _handle_bulk_deals(self, chat_id):
         """Fetches bulk deals and always replies (live or cached)."""
         await self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals...</b>")
@@ -635,6 +708,7 @@ class TelegramBot:
             logger.error(f"Bulk deal fetch failed: {e}")
             await self._send_raw(chat_id, "⚠️ Error fetching NSE data.")
 
+    @rate_limit(max_calls=5, period=60)
     async def _handle_upcoming(self, chat_id):
         """Placeholder for Corporate Calendar."""
         await self._send_raw(chat_id, "🗓️ <b>Corporate Calendar</b>\nFeature coming soon. Stay tuned!")

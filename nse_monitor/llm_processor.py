@@ -187,7 +187,9 @@ class LLMProcessor:
             return None
 
         lead_news = event_group[0]
-        context_text = f"HEADLINE: {lead_news['headline']}\nSUMMARY: {lead_news.get('summary', '')}"
+        headline = self._sanitize_for_prompt(lead_news.get('headline', ''))
+        summary = self._sanitize_for_prompt(lead_news.get('summary', ''), max_len=1000)
+        context_text = f"HEADLINE: {headline}\nSUMMARY: {summary}"
 
         source_bias = ""
         # Rule: Only NSE/Official sources bypass the strictly-skeptical media filter
@@ -265,6 +267,15 @@ class LLMProcessor:
                     if attempt < 2: await asyncio.sleep(2 ** attempt)
             
         return None
+
+    def _sanitize_for_prompt(self, text, max_len=500):
+        """Rule #22: Security Sanitization to prevent LLM Prompt Injection."""
+        if not text: return ""
+        # 1. Remove control characters (prevent whitespace manipulation)
+        text = re.sub(r'[\x00-\x1f\x7f]', ' ', str(text))
+        # 2. Block known prompt injection keywords (case-insensitive)
+        text = re.sub(r'(?i)(ignore|forget|override|disregard|system|instruction).{0,30}(rule|prompt|instruction|guideline)', '[FILTERED]', text)
+        return text[:max_len].strip()
 
     def _robust_json_parse(self, raw_text):
         """Extracts and repairs JSON from LLM output."""

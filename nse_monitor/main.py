@@ -8,7 +8,9 @@ import signal
 import sys
 import time
 import warnings
-from datetime import datetime
+import shutil
+import glob
+from datetime import datetime, timedelta
 import inspect
 
 import aiohttp
@@ -154,6 +156,7 @@ class MarketIntelligenceSystem:
     async def start_background_tasks(self):
         await self.bot.initialize()
         asyncio.create_task(self.bot.handle_updates_loop())
+        asyncio.create_task(self.run_auto_backup_task())
         self.watchdog.start()
 
 
@@ -182,7 +185,29 @@ class MarketIntelligenceSystem:
             except Exception:
                 continue
         self.db.run_maintenance()
+        # v1.3.4: Delegating to the new high-trust backup rotation logic
         self.db.backup()
+
+    async def run_auto_backup_task(self):
+        """v2.0: Standalone background task to ensure daily snapshots (Requested)."""
+        logger.info("Auto-Backup: Background task starting.")
+        while True:
+            try:
+                # 1. Determine wait time until midnight IST
+                now = datetime.now(self.ist)
+                target = now.replace(hour=0, minute=5, second=0, microsecond=0)
+                if now >= target:
+                    target += timedelta(days=1)
+                
+                wait_seconds = (target - now).total_seconds()
+                logger.info(f"Auto-Backup: Next snapshot scheduled in {wait_seconds/3600:.1f} hours.")
+                await asyncio.sleep(wait_seconds)
+                
+                # 2. Perform consistent online backup
+                self.db.backup()
+            except Exception as e:
+                logger.error(f"Auto-Backup: Task error: {e}")
+                await asyncio.sleep(600) # Retry after 10 mins on error
 
     async def check_pending_payments(self):
         pending = self.db.get_pending_payment_links()
@@ -191,9 +216,9 @@ class MarketIntelligenceSystem:
         from nse_monitor.payment_processor import RazorpayProcessor
 
         rp = RazorpayProcessor()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for pl_id, chat_id, _days in pending:
-            days_added = await loop.run_in_executor(None, lambda: rp.verify_payment_status(pl_id))
+            days_added = await loop.run_in_executor(None, lambda id=pl_id: rp.verify_payment_status(id))
             if days_added:
                 self.db.add_working_days(chat_id, days_added)
                 self.db.update_payment_link_status(pl_id, "processed")

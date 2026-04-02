@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # =================================================================
-#  MARKET PULSE v1.0 - ONE-CLICK VPS INSTALLER (Ubuntu)
+#  BULKBEAT TV v1.0 - ONE-CLICK VPS INSTALLER (Ubuntu)
 # =================================================================
 
 set -e  # Exit strictly on error
 
-echo "🚀 Starting Deployment for Market Pulse v1.0..."
+echo "🚀 Starting Deployment for Bulkbeat TV v1.0..."
 echo "--------------------------------------------------------"
 
 # 1. UPDATE SYSTEM
@@ -80,7 +80,7 @@ SERVICE_PATH="/etc/systemd/system/nsebot.service"
 # Dynamically write service file with correct user paths
 sudo bash -c "cat > $SERVICE_PATH" <<EOT
 [Unit]
-Description=Market Pulse Intelligence Bot v1.0 (Live)
+Description=Bulkbeat TV Intelligence Bot v1.0 (Live)
 After=network.target
 
 [Service]

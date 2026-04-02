@@ -14,15 +14,18 @@ load_dotenv(os.path.join(ROOT_DIR, ".env"))
 # 2. NSE & Bot Identity
 NSE_BASE_URL = "https://www.nseindia.com"
 NSE_API_URL = f"{NSE_BASE_URL}/api/corporate-announcements"
-BOT_NAME = "Market Pulse"
+BOT_NAME = "Bulkbeat TV"
 
 # 3. Connectivity (Telegram & Admin)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_ADMIN_BOT_TOKEN = os.getenv("TELEGRAM_ADMIN_BOT_TOKEN", "").strip()
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
 TELEGRAM_DOCUMENT_TIMEOUT_SEC = int(os.getenv("TELEGRAM_DOCUMENT_TIMEOUT_SEC", 45))
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123").strip()
-ADMIN_SESSION_TIMEOUT_MINUTES = int(os.getenv("ADMIN_SESSION_TIMEOUT_MINUTES", 43200))
+
+# v2.0: Secure Authentication (Bcrypt)
+# Place the output of scripts/generate_hash.py into the environment
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()
+ADMIN_SESSION_TIMEOUT_MINUTES = int(os.getenv("ADMIN_SESSION_TIMEOUT_MINUTES", 60))
 
 _chat_ids = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [cid.strip() for cid in _chat_ids.split(",") if cid.strip()]

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Real-time log viewer for Market Pulse v2.0 (Institutional Mode)
+# Real-time log viewer for Bulkbeat TV v2.0 (Institutional Mode)
 echo "========================================================="
-echo "   MARKET PULSE LIVE LOGS (Systemd + App Logs)"
+echo "   BULKBEAT TV LIVE LOGS (Systemd + App Logs)"
 echo "========================================================="
 echo "Press Ctrl+C to exit."
 echo ""

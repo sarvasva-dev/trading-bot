@@ -1,9 +1,9 @@
 #!/bin/bash
 # run_all.sh
-# Ubuntu/Linux launcher for Market Pulse v1.0
+# Ubuntu/Linux launcher for Bulkbeat TV v1.0
 
 echo "======================================================"
-echo "   MARKET PULSE v1.0 - LINUX LAUNCHER                 "
+echo "   BULKBEAT TV v1.0 - LINUX LAUNCHER                 "
 echo "======================================================"
 
 # Check if python3-venv is installed

@@ -1,113 +1,163 @@
-# 🚀 Market Pulse (NSE2) v1.1 - Complete Project Documentation (A-Z)
+# 🚀 Bulkbeat TV v2.0 — Complete Project Documentation
 
-Aapka ye project ek **High-Precision Market Intelligence System** hai jo NSE (National Stock Exchange) ki announcements ko real-time mein scan karke, AI ki madad se filter karta hai aur sirf kaam ki khabar (High Impact signals) subscribers tak pahunchata hai.
-
-Is document mein hum har ek chhoti-badi cheez ko bahut hi asaan bhasha mein samjhenge.
+Ek **High-Precision Market Intelligence System** jo NSE ki announcements ko real-time mein scan karke, AI se filter karta hai aur sirf kaam ki khabar (High Impact signals) subscribers tak pahunchata hai.
 
 ---
 
-## 🏗️ 1. Bot Kaise Kaam Karta Hai? (The Simple Logic)
+## 🏗️ 1. Bot Kaise Kaam Karta Hai?
 
-Bot ka basic kaam 4 steps mein pura hota hai:
+Bot ka kaam 4 steps mein pura hota hai:
 
-1.  **Fetching (Data nikaalna)**: Har 3 minute mein bot NSE ki website (Proxy rotation ke saath) par check karta hai. Sab kuch ek **Zero-Loss Queue** (Database) mein save hota hai taaki kuch miss na ho.
-2.  **Filtering (Kachra saaf karna)**: Routine filings ko exclude karke, sirf core news ko process queue mein daala jata hai.
-3.  **AI Analysis (Dimag lagana)**: Bot parallel tareeqe se (4 khabrein ek saath) PDF download karta hai. Agar PDF photo hai (scanned), toh **Tesseract OCR (Vision)** use hota hai. Fir data **Sarvam 105b-32k AI Model** ko diya jata hai.
-4.  **Alerting (Khabar dena)**: AI 22-Rules pakad kar **1 se 10** ke beech **Impact Score** deta hai. Badi khabar hone par turant Telegram par premium users ko link and tags ("SME" / "Big Ticket") ke saath bhejta hai.
-
----
-
-## 📑 2. Detailed Internal Components (Har Part Ka Kaam)
-
-### A. Core Engine (`main.py`)
-Ye bot ka "Sanchalak" (manager) hai.
-- Ye `ThreadPoolExecutor` use karke **4 AI analysis threads** ek saath chalata hai, jisse bot 4x fast ho gaya hai.
-- Naya **Watchdog system** lagaya gaya hai; agar bot loop hang ho toh auto restart (`os._exit`) trigger karta hai.
-
-### B. Security & Data Scrapers
-- **NSE API Client (`nse_api.py`)**: NSE website se data nikalne wala engine.
-- **Proxy Manager (`proxy_manager.py`)**: Anti-Ban system. Har NSE scan ya PDF download se pehle ek zinda Indian HTTPS proxy fetch karke lagata hai, jisse bot kabhi IP block nahi hota.
-- **Vision Engine (`pdf_processor.py`)**: Filings padhne ka module. Scanned documents ko `pytesseract` image-to-text se decode karta hai.
-
-### C. Database (`database.py`) - Storage & Queue
-Bot ki "Yaaddaasht". Isme ek Hard `threading.Lock()` hai taaki backend kabhi corrupt na ho:
-1.  **News Items (Queue)**: Aaj tak ki saari khabrein `status=0` (Pending) par aati hain, process hoti hain, aur `status=1/2` mein move hoti hain.
-2.  **Users**: Kaun premium hai, kiske kitne din bache hain.
-3.  **Payment Links**: Razorpay IDs ka hisab.
-
-### D. User Bot & Admin Bot
-- **User Bot ([telegram_bot.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/nse_monitor/telegram_bot.py))**: Ye subscribers se baat karta hai. Balance dikhana, recharge link dena, aur signals bhejna iska kaam hai.
-- **Admin Bot ([admin_bot.py](file:///c:/Users/Admin/OneDrive/Desktop/nse2/admin_bot.py))**: Ye aapke liye hai. Isse aap kisi user ko free days de sakte hain ya sabko naya announcement bhej sakte hain (`/broadcast`).
+1. **Fetching**: Har 3 minute mein 5 sources se async parallel fetch hota hai. Sab kuch **Zero-Loss SQLite Queue** mein save hota hai.
+2. **Deduplication**: SHA-256 content hash se duplicate items filter hote hain before DB insert.
+3. **AI Analysis**: Pending items batch of 4 mein async process hote hain. PDF hai toh download + OCR, fir **Sarvam 30B** (`sarvam-30b`) ko diya jata hai.
+4. **Alerting**: AI **Impact Score 1-10** deta hai. Ultra-Strict policy ke through pass hone par Telegram par premium users ko alert bheja jata hai.
 
 ---
 
-## ⚖️ 3. "The 22 Rules" - AI Kaise Score Deta Hai?
+## 📑 2. Internal Components
 
-Bot ka sabse bada USP (Unique Selling Point) iska **AI Decision System** hai. Sarvam AI ko 22 rules ki instruction di gayi hai, jinmein se main ye hain:
+### A. Core Engine (`main.py`) — `MarketIntelligenceSystem`
+- Fully `asyncio`-native. Koi ThreadPool nahi.
+- `run_cycle()` mein 5 sources ko `asyncio.gather()` se parallel fetch karta hai.
+- `_process_single_item()` mein PDF download, OCR, AI analysis, aur alert dispatch hota hai.
+- **Single-instance lock**: PID file se ensure karta hai ki ek hi process chale.
+- **Startup warmup**: Boot par 3 forced cycles chalata hai.
 
-1.  **Forward-Looking Only**: Jo ho chuka hai (jaise kal meeting hui) uski report rejection mein jayegi. Focus sirf "Future" par hota hai.
-2.  **Crore Threshold (Badi Raqam)**: Choti companies ke liye order 50 Cr aur badi companies ke liye 500 Cr se zyada hona chahiye tabhi alert aayega.
-3.  **No FOMO Policy**: Purani khabron ko score 0 diya jata hai.
-4.  **Sentiment Mapping**: Khabar Positive (Bullish) hai ya Negative (Bearish), ye AI decide karta hai.
-5.  **Exclusions**: Dividend, address change, auditor resignations (except CEO) ko AI reject karta hai.
+### B. Data Sources (`sources/`)
+| Source | Class | Type |
+|--------|-------|------|
+| NSE Corporate Filings | `NSESource` | Live alerts |
+| NSE SME Filings | `NseSmeSource` | Live alerts |
+| NSE Bulk/Block Deals | `BulkDealSource` | Live alerts (≥ ₹5 Cr) |
+| Economic Times | `EconomicTimesSource` | Ingest-only (no alerts) |
+| Moneycontrol | `MoneycontrolSource` | Ingest-only (no alerts) |
+
+### C. NSE API Client (`nse_api.py`)
+- NSE website se async data fetch karta hai.
+- `on_403` callback: IP ban hone par Admin ko Telegram alert bhejta hai.
+
+### D. PDF & OCR Engine (`pdf_processor.py`)
+- PDF download karta hai, text extract karta hai.
+- Scanned/image PDFs ke liye `pytesseract` OCR (120 DPI, RAM-safe serial processing).
+- Enriched text `[ENRICHMENT]` tag ke saath AI ko bheja jata hai.
+
+### E. AI Processor (`llm_processor.py`)
+- **Sarvam 30B** (`sarvam-30b`) model use karta hai.
+- Output: `impact_score`, `sentiment`, `symbol`, `trigger`, `sector`, `valid_event`.
+
+### F. Database (`database.py`)
+- SQLite WAL mode, 30s busy-timeout.
+- Tables: news queue, users, payment links, admin sessions, system config, alert history.
+- `backup()`: SQLite Online Backup API se daily hot-backup.
+
+### G. Scheduler (`scheduler.py`) — `MarketScheduler`
+APScheduler (AsyncIO) se 7 jobs:
+
+| Job | Time (IST) | Frequency |
+|-----|-----------|-----------|
+| Intelligence Cycle | Every 3 min | Continuous |
+| Payment Check | Every 5 min | Continuous |
+| Pre-Market Report | 08:30 | Mon-Fri |
+| EOD Billing | 16:00 | Mon-Fri |
+| Daily Maintenance | 00:01 | Daily |
+| Weekly Memory Flush | Sun 02:00 | Weekly |
+| Holiday Calendar Sync | Sun 03:00 | Weekly |
+
+**Startup catch-up**: Agar bot 08:30–09:15 ke beech start ho toh report turant bhejta hai.
+
+### H. User Bot (`telegram_bot.py`) & Admin Bot (`admin_bot.py`)
+- **User Bot**: `/start`, `/hisab`, `/bulk`, `/upcoming`, `/recharge`
+- **Admin Bot**: `/pulse`, `/broadcast`, `/grant`, `/login`
+
+### I. Supporting Modules
+- **`market_analyzer.py`**: Smart money / institutional flow analysis (score ≥ 7 par trigger).
+- **`impact_tracker.py`**: Alert ke baad price movement track karta hai.
+- **`nudge_manager.py`**: Inactive users ko automated re-engagement messages.
+- **`trading_calendar.py`**: NSE holidays + trading day detection.
+- **`watchdog.py`**: Service health monitoring.
+- **`report_builder.py`**: Morning pre-market intelligence report generator.
 
 ---
 
-## 💰 4. Billing System: "Market Days" Concept
+## ⚖️ 3. Alert Policy — `ULTRA_STRICT_8PLUS`
 
-Ye bot traditional monthly billing nahi karta. Ye sirf **Trading Days** count karta hai:
-- Agar aaj **Market Open** (Mon-Fri) hai, tabhi user ka 1 credit (day) katega.
-- **Sat-Sun aur Holidays** ko bot user ke paise (credits) nahi kaatta.
-- **Free Trial**: Naye user ko register karte hi **2 Free Market Days** milte hain.
-- **Auto-Activation**: Razorpay par payment hote hi 1-2 minute mein bot apne aap ID activate kar deta hai.
+Live market hours mein alert ke liye **saari conditions** pass karni hoti hain:
 
----
-
-## 🗓️ 5. Special Features (Utility)
-
-- **Morning report (08:30 AM)**: Poori raat aur weekend ki sabse important khabron ka ek "Executive Summary" report bhejta hai.
-- **`/bulk` Command**: NSE se aaj ke Bulk aur Block deals nikaal kar dikhata hai.
-- **`/upcoming` Command**: Agle 14 dinon mein kaunsi companies ka Dividend, Split ya Bonus aane wala hai, uski list deta hai.
-- **Precision Alert**: Alert message mein direct NSE ki original PDF filing ka link hota hai taaki user verify kar sake.
+1. **Score ≥ 8** (Sarvam AI output)
+2. **`valid_event = True`** (AI ne confirm kiya)
+3. **Source whitelist**: Sirf `NSE`, `NSE_SME`, `NSE_BULK` — ET/MC ingest-only hain
+4. **Neutral Block**: `sentiment = Neutral` hone par alert nahi
+5. **Bulk Deal Filter**: `NSE_BULK` source ke liye deal value ≥ ₹5 Cr
+6. **Symbol Cooldown**: Ek symbol par 90 min mein ek hi alert
+7. **Daily Hard Cap**: Max 10 alerts/day (score ≥ 9 bypass kar sakta hai)
+8. **Post-Market**: Market band hone ke baad sirf score = 10 alerts fire hote hain
 
 ---
 
-## 🚀 6. Setup & Specs (Quick Info)
+## 💰 4. Billing System — Market Days
 
-- **Platform**: Linux ya Windows VPS par 24/7 chalta hai.
-- **Memory**: Sirf 1GB RAM mein bhi makhan ki tarah chalta hai (RAM Balanced).
-- **Security**: Admin access sirf password se milti hai.
+- Sirf **Trading Days** count hote hain (Mon-Fri, NSE holidays exclude).
+- **16:00 IST** par EOD billing: `decrement_working_days()` call.
+- **Free Trial**: Naye user ko 2 free market days.
+- **Auto-Activation**: Razorpay payment verify hone par 1-2 min mein auto-activate.
+
+### Subscription Plans
+| Plan | Amount | Market Days |
+|------|--------|-------------|
+| Market Trial | ₹99 | 2 days |
+| Growth Value | ₹499 | 7 days |
+| Institutional Pro | ₹999 | 28 days |
+| Annual Industry Partner | ₹7,999 | 336 days |
 
 ---
-### 🚦 v1.1 Dataflow Diagram (Architectural View)
+
+## 🗓️ 5. Special Features
+
+- **Morning Report (08:30)**: Raat aur weekend ki top signals ka executive summary. Monday ko 64 hours ka data, baaki din 18 hours.
+- **`/bulk`**: NSE ke aaj ke Bulk/Block deals.
+- **`/upcoming`**: Agle 14 din ke Dividend, Split, Bonus events.
+- **Smart Money**: Score ≥ 7 par institutional flow analysis auto-trigger.
+- **Impact Tracking**: Alert ke baad price movement record hota hai accuracy ke liye.
+
+---
+
+## 🚀 6. Specs
+
+- **Runtime**: Python 3.8+, fully async (`asyncio`)
+- **Memory**: 200–400 MB (1GB VPS comfortable)
+- **DB**: SQLite WAL, auto-backup, 5 copies retained
+- **Logs**: Rotating file handler, 5MB × 3 files
+
+---
+
+## 🔄 v2.0 Dataflow Diagram
 
 ```mermaid
 graph TD
-    subgraph "External Sources"
-        NSE[NSE Website]
-        Proxy[ProxyScrape API]
+    subgraph "5 Data Sources"
+        NSE[NSE Corporate]
+        SME[NSE SME]
+        BULK[NSE Bulk Deals]
+        ET[Economic Times]
+        MC[Moneycontrol]
     end
 
-    subgraph "Data Ingestion (Anti-Fragile)"
-        Proxy -->|Indian IP| Client[NSE API Client]
-        NSE -->|Data via Proxy| Client
-        Client -->|Raw Filings| Filter[Noise Filter]
-        Filter -->|Valuable News| DBQueue[(Zero-Loss SQLite DB)]
+    subgraph "Async Ingestion (asyncio.gather)"
+        NSE & SME & BULK & ET & MC -->|parallel fetch| Dedup[SHA-256 Dedup]
+        Dedup -->|new items only| DBQueue[(SQLite WAL Queue)]
     end
 
-    subgraph "Concurrency Engine"
-        DBQueue -->|Batch of 4| Threads[4 ThreadPool Workers]
-        Threads -->|Fetch PDF| Vision[PDF & OCR Engine]
-        Vision -->|Clean Text| Sarvam[Sarvam 105b-32k AI]
+    subgraph "AI Processing (batch of 4)"
+        DBQueue -->|pending items| PDFEngine[PDF + OCR Engine]
+        PDFEngine -->|enriched text| Sarvam[Sarvam 30B]
+        Sarvam -->|score, sentiment, symbol| Policy[Ultra-Strict Policy Engine]
     end
 
-    subgraph "Output Matrix"
-        Sarvam -->|Rule 22 Output| DBLock[Global DB Lock]
-        DBLock -->|Update Queue Status| DBQueue
-        Sarvam -->|Score >= Alert Thresh| Broadcaster[Telegram Dispatcher]
-        Broadcaster -->|Rate-Limited MSGs| Premium((Premium Users))
+    subgraph "Alert Dispatch"
+        Policy -->|score≥8, whitelisted, cooldown OK| SmartMoney[Smart Money Analyzer]
+        SmartMoney -->|enriched signal| TelegramBot[Telegram Dispatcher]
+        TelegramBot -->|rate-limited| Premium((Premium Users))
+        TelegramBot -->|post-alert| ImpactTracker[Impact Tracker]
     end
 ```
-
----
-*Ye project ek complete, automated trading intelligence ecosystem hai jo traders ka ghanto ka kaam seconds mein kar deta hai.*

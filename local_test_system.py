@@ -151,7 +151,7 @@ def test_payment_processor():
 
 def run_full_suite():
     print("\n" + "="*50)
-    print("🚀 MARKET PULSE - FULL SYSTEM AUDIT")
+    print("🚀 BULKBEAT TV - FULL SYSTEM AUDIT")
     print("="*50 + "\n")
     
     results = {

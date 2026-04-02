@@ -19,7 +19,7 @@ logger = logging.getLogger("V7_Launcher")
 
 
 def run():
-    logger.info("Initializing Market Pulse launcher...")
+    logger.info("Initializing Bulkbeat TV launcher...")
     try:
         migrate()
     except Exception as exc:

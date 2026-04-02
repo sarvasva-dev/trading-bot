@@ -1,77 +1,60 @@
-# Market Pulse v1.0 — VPS Deployment (Ubuntu 22.04, 1GB RAM)
+# Bulkbeat TV v2.0 — VPS Deployment (Ubuntu 22.04, 1GB RAM)
 
 ## Pre-Deployment Checklist
-- [ ] SSH access to VPS ready
-- [ ] `.env` file with all tokens prepared locally
-- [ ] Backup of current database (if upgrading)
-- [ ] Admin chat ID noted
+- [ ] SSH access ready
+- [ ] `.env` file prepared locally
+- [ ] DB backup taken (if upgrading)
 
 ---
 
-## Step 1: SSH into VPS and Navigate
+## Step 1: SSH & Stop Existing Service
 
 ```bash
 ssh root@<VPS_IP>
+systemctl stop nsebot 2>/dev/null || true
 cd /root/nse2
-# Check if old version is running
-ps aux | grep nse_monitor
 ```
-
-**If running:** `systemctl stop nsebot` (if using systemd) or kill watchdog process
 
 ---
 
-## Step 2: Pull Latest Code (Git or Manual)
+## Step 2: Pull Latest Code
 
-### Option A: Via Git
 ```bash
 git pull origin main
-```
-
-### Option B: Manual (If no git)
-SCP/Upload the updated files to VPS:
-```bash
-scp -r ./* root@<VPS_IP>:/root/nse2/
+# OR manual upload:
+# scp -r ./* root@<VPS_IP>:/root/nse2/
 ```
 
 ---
 
-## Step 3: Quick Validation Script
+## Step 3: Setup & Install
 
 ```bash
-cd /root/nse2
+# Backup DB
+[ -f nse_monitor/data/processed_announcements.db ] && \
+  cp nse_monitor/data/processed_announcements.db nse_monitor/data/processed_announcements.db.backup
 
-# 1. Check Python version
-python3 --version  # Should be 3.8+
-
-# 2. Backup current DB (if exists)
-[ -f nse_monitor/data/processed_announcements.db ] && cp nse_monitor/data/processed_announcements.db nse_monitor/data/processed_announcements.db.backup
-
-# 3. Create/activate .venv
 python3 -m venv .venv
 source .venv/bin/activate
-
-# 4. Install dependencies (with apscheduler fix)
 pip install --upgrade pip
 pip install -r requirements.txt
-pip install apscheduler  # New explicit dependency
 
-# 5. Run migration
+# Migrate DB schema
 python migrate_v7.py
 
-# 6. Health check
+# Health check
 python -m nse_monitor.main --health
 ```
 
 ---
 
-## Step 4: Update Systemd Service
+## Step 4: Systemd Service
 
-Edit `/etc/systemd/system/nsebot.service`:
+`/etc/systemd/system/nsebot.service`:
 
 ```ini
 [Unit]
-Description=Market Pulse v1.0 Intelligence Engine
+Description=Bulkbeat TV v2.0 Intelligence Engine
 After=network.target
 
 [Service]
@@ -81,18 +64,15 @@ WorkingDirectory=/root/nse2
 EnvironmentFile=/root/nse2/.env
 ExecStart=/root/nse2/.venv/bin/python -m nse_monitor.main
 Environment="PYTHONUNBUFFERED=1"
-
-# Self-healing
 Restart=always
 RestartSec=5
-StandardOutput=append:/root/nse2/logs/systemd.log
-StandardError=append:/root/nse2/logs/systemd.log
+StandardOutput=append:/root/nse2/nse_monitor/logs/systemd.log
+StandardError=append:/root/nse2/nse_monitor/logs/systemd.log
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Then restart:
 ```bash
 systemctl daemon-reload
 systemctl enable nsebot
@@ -101,88 +81,50 @@ systemctl start nsebot
 
 ---
 
-## Step 5: Verify it Works
+## Step 5: Verify
 
 ```bash
-# Check logs
-tail -f /root/nse2/logs/app.log
-
-# Verify scheduler is running (should show "Pre-market report" job)
+tail -f /root/nse2/nse_monitor/logs/app.log
 journalctl -u nsebot -f
 ```
 
-Expected output around 08:30 IST:
+Expected on startup:
 ```
-INFO - Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.
-INFO - Pre-market report already sent for 2026-04-01. Skipping duplicate.
-```
-
----
-
-## Step 6: Admin Access Fix
-
-**Problem:** Admin couldn't grant access after login.
-**Root Cause:** `is_admin_session_valid()` method was missing.
-**Fix:** Database method restored in v1.0.1+
-
-To test:
-```bash
-# Send /login <password> in Telegram to bot
-# Then test /pulse command - should show system status
+Bulkbeat TV v2.0 - ASYNC OS BOOT
+System initialized. Async core online.
+Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.
+Warmup complete. System entering high-trust monitoring mode.
 ```
 
 ---
 
-## Rollback Plan (If Issues)
+## Rollback
 
 ```bash
 systemctl stop nsebot
-
-# Restore backup
 cp nse_monitor/data/processed_announcements.db.backup nse_monitor/data/processed_announcements.db
-
-# Revert to last git commit
 git reset --hard HEAD~1
-
-# Restart
 systemctl start nsebot
 ```
 
 ---
 
-## 1GB RAM Performance Notes
+## 1GB RAM Notes
 
-- **Expected Memory:** 200-400MB (Python + DB + async tasks)
-- **Swap Recommended:** 512MB (`free -h` to check)
-- **Monitor:** `watch -n 2 free -h`
-
-If hitting swap:
-```bash
-# Reduce log retention
-find /root/nse2/logs -name "*.log" -mtime +30 -delete
-```
+- Expected: 200–400 MB
+- Monitor: `watch -n 2 free -h`
+- Weekly `os._exit(0)` at Sun 02:00 IST auto-clears memory leak buildup
 
 ---
 
-## Critical Timings
+## Scheduler Reference (IST)
 
-| Job | Time (IST) | Frequency |
-|-----|-----------|-----------|
-| Pre-Market Report | **08:30** | Mon-Fri |
-| 3-Min Intel Cycle | Every 3 min | All-day |
+| Job | Time | Frequency |
+|-----|------|-----------|
+| Intelligence Cycle | Every 3 min | Continuous |
+| Payment Check | Every 5 min | Continuous |
+| Pre-Market Report | 08:30 | Mon-Fri |
+| EOD Billing | 16:00 | Mon-Fri |
 | Daily Maintenance | 00:01 | Daily |
-| Post-Market Billing | 16:00 | Mon-Fri |
+| Memory Flush | Sun 02:00 | Weekly |
 | Holiday Sync | Sun 03:00 | Weekly |
-
----
-
-## Support Log Format
-
-If issues, attach:
-```bash
-# Copy these to support
-tail -500 /root/nse2/logs/app.log > /root/nse2/logs/support_dump.txt
-ps aux | grep python > /tmp/process_state.txt
-free -h > /tmp/memory_state.txt
-df -h > /tmp/disk_state.txt
-```

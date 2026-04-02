@@ -3,16 +3,26 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
-# .env  <-- Un-ignored as per user request to include keys
+.venv/
+.env  # Secured - do not track keys in production
 
 # Project Specific
-# nse_monitor/data/ <-- Un-ignored
 nse_monitor/downloads/
 nse_monitor/logs/
 *.log
 .vscode/
 .idea/
-# *.db <-- Un-ignored
+
+# Database & Backups (never commit user data)
 *.db-wal
 *.db-shm
+nse_monitor/data/
+backups/
+*.bak
 
+# Runtime artifacts
+nsebot.pid
+tmp/
+
+# Dev machine files
+q-dev-chat-*.md

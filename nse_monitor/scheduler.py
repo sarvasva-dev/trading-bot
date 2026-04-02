@@ -70,7 +70,7 @@ class MarketScheduler:
                 await asyncio.sleep(3600)
             return
 
-        logger.info("Initializing Market Pulse Schedule (v2.0 Async)...")
+        logger.info("Initializing Bulkbeat TV Schedule (v2.0 Async)...")
         await self._ensure_calendar_is_fresh()
         
         # 1. 3-Minute Intelligence Cycle

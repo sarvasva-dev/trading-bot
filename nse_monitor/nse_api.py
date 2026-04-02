@@ -5,7 +5,7 @@ import random
 import pytz
 from datetime import datetime, timedelta
 from nse_monitor.config import HEADERS, NSE_BASE_URL, NSE_API_URL, USER_AGENTS
-# from nse_monitor.proxy_manager import ProxyManager # Keeping imports for potential future use
+# Proxy-free Direct Mode (Reverted per User Task)
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,12 @@ def retry_with_backoff(retries=3, backoff_in_seconds=1):
 class NSEClient:
     def __init__(self, on_403=None):
         self.session = None  # Created lazily in async context
-        # self.proxy_mgr = ProxyManager() # Bypassed
-        self.current_proxy = None # Direct Mode (per user request)
         self.on_403 = on_403
         self.is_connected = False
         self.lock = asyncio.Lock()
 
     async def ensure_session(self):
-        """Ensures an aiohttp session is active and warmed up."""
+        """Ensures an aiohttp session is active and warmed up (Direct Mode)."""
         if self.session is None or self.session.closed:
             async with self.lock:
                 if self.session is None or self.session.closed:
@@ -95,6 +93,7 @@ class NSEClient:
         async with self.session.get(NSE_API_URL, params=params, timeout=15) as response:
             if response.status in [401, 403]:
                 logger.warning(f"⚠️ NSE Access Denied (403). Identity Pressure Detected.")
+                
                 if self.on_403:
                     try: 
                         msg = f"🚨 <b>NSE IP PRESSURE:</b> 403 on {index}."

@@ -1,5 +1,5 @@
 @echo off
-REM Market Pulse v1.0 - Windows Deployment Script
+REM Bulkbeat TV v1.0 - Windows Deployment Script
 REM Usage: deploy_to_windows.bat
 
 setlocal enabledelayedexpansion
@@ -10,7 +10,7 @@ set LOG_DIR=%PROJECT_DIR%\logs
 
 echo.
 echo ==========================================
-echo Market Pulse Windows Deployment
+echo Bulkbeat TV Windows Deployment
 echo ==========================================
 echo.
 

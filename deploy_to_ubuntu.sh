@@ -1,5 +1,5 @@
 #!/bin/bash
-# Market Pulse v1.0 - VPS Deployment Script (Ubuntu 22.04)
+# Bulkbeat TV v1.0 - VPS Deployment Script (Ubuntu 22.04)
 # Usage: bash deploy_to_ubuntu.sh
 
 set -e
@@ -9,7 +9,7 @@ VENV_DIR="$PROJECT_DIR/.venv"
 LOG_DIR="$PROJECT_DIR/logs"
 
 echo "=========================================="
-echo "Market Pulse VPS Deployment (Ubuntu 22.04)"
+echo "Bulkbeat TV VPS Deployment (Ubuntu 22.04)"
 echo "=========================================="
 echo ""
 

@@ -1,4 +1,4 @@
-﻿import sqlite3
+import sqlite3
 import os
 import glob
 import logging
@@ -24,39 +24,47 @@ class Database:
             self._migrate_schema()
         except sqlite3.DatabaseError as e:
             if "malformed" in str(e).lower():
-                logger.error(f"âŒ DATABASE CORRUPTED: {e}. Initiating auto-rescue...")
+                logger.error(f"â Œ DATABASE CORRUPTED: {e}. Initiating auto-rescue...")
                 self._handle_malformed()
             else:
                 raise e
 
     def _handle_malformed(self):
-        """v2.0: Rescues the system from a 'malformed' error by backing up and resetting."""
+        """v2.1: Rescues the system from a 'malformed' error with mandatory backup checks (Option E)."""
         import shutil
+        import sys
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = f"{DB_PATH}.malformed_{timestamp}.bak"
+        
         try:
             if hasattr(self, 'conn') and self.conn:
                 self.conn.close()
+            
+            # 1. Preserve the corrupted DB as a diagnostic copy
             shutil.move(DB_PATH, backup_path)
-            logger.warning(f"âš ï¸ Corrupted DB moved to {backup_path}")
+            logger.warning(f"🚨 DATABASE CORRUPTED: Original moved to {backup_path}")
 
-            # Prefer restoring the latest healthy backup to preserve users/subscriptions.
+            # 2. Attempt restoration from the dedicated 'backups/' directory
             if self._restore_latest_backup():
                 self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
                 self.lock = threading.Lock()
                 self._create_table()
                 self._migrate_schema()
-                logger.info("âœ… Database restored from backup successfully.")
+                logger.info("✅ Database successfully restored from recent backup.")
                 return
 
-            # Last fallback: create fresh DB if no valid backup exists.
-            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            self.lock = threading.Lock()
-            self._create_table()
-            self._migrate_schema()
-            logger.info("âœ… Database reset successfully. Re-ingest starting...")
+            # 3. CRITICAL: Halt rather than auto-resetting if no backups exist.
+            # This prevents silent data loss for users and billing logs.
+            logger.critical("🔥 FATAL: Database corrupted and NO healthy backups found in 'backups/' folder.")
+            logger.critical("SYSTEM HALTED. Manual intervention required to prevent data loss.")
+            
+            # Attempt a minimal alert if the bot instance is accessible (rare in this state)
+            # but we assume the main.py watchdog or systemd will detect this exit.
+            sys.exit(1)
+
         except Exception as ex:
-            logger.critical(f"ðŸ”¥ FATAL: Database recovery failed: {ex}")
+            logger.critical(f"🔥 FATAL: Database recovery logic failed: {ex}")
+            sys.exit(1)
 
     def _restore_latest_backup(self):
         """Restores DB_PATH from the newest valid backup snapshot, if available."""
@@ -752,7 +760,7 @@ class Database:
             "signals_today": signals
         }
 
-    def is_admin_session_valid(self, chat_id, timeout_minutes=43200):
+    def is_admin_session_valid(self, chat_id, timeout_minutes=60):
         """Checks if an admin session is still valid."""
         cursor = self.conn.cursor()
         cursor.execute(

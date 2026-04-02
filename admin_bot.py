@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import aiohttp
 import asyncio
 import time
@@ -9,7 +9,8 @@ import psutil
 import shutil
 from datetime import datetime
 import pytz
-from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD, BOT_NAME, TELEGRAM_BOT_TOKEN, ADMIN_SESSION_TIMEOUT_MINUTES
+import bcrypt
+from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD_HASH, BOT_NAME, TELEGRAM_BOT_TOKEN, ADMIN_SESSION_TIMEOUT_MINUTES
 from nse_monitor.database import Database
 
 # Logging Setup
@@ -37,6 +38,7 @@ class AdminPanel:
         self.db = Database()
         self.last_update_id = 0
         self.session = None  # Created in run()
+        self.failed_logins = {}  # chat_id: [timestamps]
 
     def _repair_mojibake_text(self, value):
         if not isinstance(value, str) or not value:
@@ -123,16 +125,48 @@ class AdminPanel:
         chat_id = str(msg["chat"]["id"])
         text = msg.get("text", "").strip()
         
-        # 1. Login Logic (Multi-User v2.0)
+        # 1. Login Logic (Multi-User v2.0 with Bcrypt & Brute Force Protection)
         if text.startswith("/login"):
+            from nse_monitor.config import ADMIN_PASSWORD_HASH
+            
+            # Security: Delete password message
+            await self._delete_message(chat_id, msg["message_id"])
+
+            now = time.time()
+            attempts = [t for t in self.failed_logins.get(chat_id, []) if now - t < 900] # 15 min window
+            if len(attempts) >= 3:
+                wait_sec = int(900 - (now - attempts[0]))
+                await self._send(chat_id, f"🚫 <b>Security Lockout.</b> Too many failed attempts. Try again in {wait_sec // 60} minutes.")
+                return
+
             parts = text.split()
-            if len(parts) == 2 and parts[1] == ADMIN_PASSWORD:
+            if len(parts) < 2:
+                await self._send(chat_id, "❌ Usage: <code>/login <password></code>")
+                return
+                
+            provided_password = parts[1]
+            
+            # Check Bcrypt Hash
+            if not ADMIN_PASSWORD_HASH:
+                await self._send(chat_id, "⚠️ <b>System Error:</b> ADMIN_PASSWORD_HASH not configured.")
+                return
+                
+            try:
+                is_valid = bcrypt.checkpw(provided_password.encode('utf-8'), ADMIN_PASSWORD_HASH.encode('utf-8'))
+            except Exception as e:
+                logger.error(f"Admin Bcrypt Error: {e}")
+                is_valid = False
+
+            if is_valid:
+                self.failed_logins.pop(chat_id, None)
                 self.db.set_admin_session(chat_id)
                 await self._send(chat_id, "<b>Authentication Successful!</b>\nYou now have persistent admin access.")
                 await self._send_main_menu(chat_id)
                 logger.warning(f"New Admin Login: {chat_id}")
             else:
-                await self._send(chat_id, "<b>Invalid Credentials.</b>")
+                self.failed_logins.setdefault(chat_id, []).append(now)
+                remaining = 3 - len(self.failed_logins[chat_id])
+                await self._send(chat_id, f"<b>Invalid Credentials.</b> {remaining} attempts remaining.")
             return
 
         # 2. Admin Command Guard
@@ -208,8 +242,18 @@ class AdminPanel:
             uid = data.split("_")[1]
             await self._show_plan_options(chat_id, uid)
         elif data.startswith("grant_"):
-            _, uid, days = data.split("_")
-            await self._execute_grant_interactive(chat_id, uid, int(days))
+            parts = data.split("_")
+            if len(parts) == 3:
+                _, uid, days_str = parts
+                try:
+                    days = int(days_str)
+                    # Security: Strict whitelist of allowed grant values
+                    if days in [2, 7, 28, 336]:
+                        await self._execute_grant_interactive(chat_id, uid, days)
+                    else:
+                        logger.error(f"Malicious callback manipulation attempt from {from_id}: {data}")
+                        await self._answer_callback(cb["id"], "Error: Invalid grant value.")
+                except ValueError: pass
         
         elif data == "menu_main":
             await self._send_main_menu(chat_id)
@@ -331,7 +375,7 @@ class AdminPanel:
             f"<b>Total Users:</b> {total}\n"
             f"<b>Active Subs:</b> {active}\n"
             f"------------------------------\n"
-            f"<i>Build: Institutional Async Pro</i>"
+            f"<i>Build: Bulkbeat TV Pro</i>"
         )
         await self._send(chat_id, text)
 
@@ -476,6 +520,10 @@ class AdminPanel:
         if not msg_body:
             await self._send(chat_id, "Empty broadcast.")
             return
+        
+        if len(msg_body) > 1000:
+            await self._send(chat_id, "❌ <b>Error:</b> Broadcast too long (Max 1000 chars).")
+            return
 
         active_users = self.db.get_active_users()
         count = 0
@@ -504,6 +552,12 @@ class AdminPanel:
             payload["show_alert"] = show_alert
         try:
             async with self.session.post(f"{self.base_url}/answerCallbackQuery", json=payload, timeout=5) as resp:
+                await resp.text()
+        except: pass
+
+    async def _delete_message(self, chat_id, message_id):
+        try:
+            async with self.session.post(f"{self.base_url}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5) as resp:
                 await resp.text()
         except: pass
 

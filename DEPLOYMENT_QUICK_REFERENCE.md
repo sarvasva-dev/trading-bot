@@ -1,108 +1,49 @@
-# Quick Deployment Reference - Market Pulse Bot
+# Deployment Quick Reference — Bulkbeat TV v2.0
 
-## 🚀 VPS Ubuntu 22.04 (1GB RAM) - Fast Track
+## 🚀 VPS Ubuntu 22.04 — Fast Track
 
-### Pre-Flight Checks
 ```bash
 ssh root@YOUR_VPS_IP
-apt update && apt install -y python3-pip python3-venv git
 cd /root/nse2
-```
-
-### Automated Deployment (Recommended)
-```bash
 bash deploy_to_ubuntu.sh
 ```
 
-**What it does:**
-- ✓ Stops existing service
-- ✓ Backs up database
-- ✓ Creates virtualenv
-- ✓ Installs dependencies
-- ✓ Runs migration
-- ✓ Verifies health
-- ✓ Starts systemd service
-
-**Time:** ~5-7 minutes (depending on pip)
+**What it does:** stops service → backs up DB → creates venv → installs deps → migrates → health check → starts systemd
 
 ---
 
-## 🖥️ Windows Local Machine - Fast Track
+## 🖥️ Windows — Fast Track
 
 ```cmd
 cd C:\path\to\nse2
 deploy_to_windows.bat
 ```
 
-**What it does:**
-- ✓ Creates virtualenv
-- ✓ Installs dependencies
-- ✓ Runs migration
-- ✓ Runs health checks
-- ✓ Shows run instructions
-
-**Time:** ~3-5 minutes
-
 ---
 
-## 🔧 Manual Deployment (If Script Fails)
+## 🔧 Manual Steps
 
-### Step 1: Setup
 ```bash
-python3 -m venv /root/nse2/.venv
-source /root/nse2/.venv/bin/activate
-cd /root/nse2
-```
-
-### Step 2: Install
-```bash
-pip install --upgrade pip
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install apscheduler
-```
-
-### Step 3: Migrate
-```bash
 python migrate_v7.py
-```
-
-### Step 4: Health Check
-```bash
 python -m nse_monitor.main --health
-```
-
-### Step 5: Start Service
-```bash
-systemctl daemon-reload
-systemctl start nsebot
-systemctl status nsebot
-```
-
-### Step 6: Monitor
-```bash
-tail -f /root/nse2/logs/app.log
-```
-
-**Expected output:**
-```
-Market Pulse Scheduler configured with 7 jobs
-Scheduler running (IST timezone)
-Listening for Telegram updates...
+systemctl daemon-reload && systemctl start nsebot
 ```
 
 ---
 
-## ⚡ Critical Timings (IST / GMT+5:30)
+## ⚡ Scheduler (IST)
 
-| Time | Job | Status |
-|------|-----|--------|
-| 08:30 | Pre-Market Report | ✓ Guaranteed (catch-up logic) |
-| Every 3min | Data Cycle | ✓ Continuous |
-| Every 5min | Payment Check | ✓ Continuous |
-| 16:00 | Daily Billing | ✓ Once/day |
-| 00:01 | Maintenance | ✓ Once/day |
-| Sun 02:00 | Memory Flush | ✓ Weekly |
-| Sun 03:00 | Holiday Sync | ✓ Weekly |
+| Time | Job |
+|------|-----|
+| Every 3 min | Intelligence Cycle |
+| Every 5 min | Payment Check |
+| 08:30 Mon-Fri | Pre-Market Report |
+| 16:00 Mon-Fri | EOD Billing |
+| 00:01 Daily | Maintenance + Backup |
+| Sun 02:00 | Memory Flush |
+| Sun 03:00 | Holiday Sync |
 
 ---
 
@@ -110,84 +51,50 @@ Listening for Telegram updates...
 
 | Problem | Fix |
 |---------|-----|
-| "ModuleNotFoundError: apscheduler" | `pip install apscheduler` |
-| "Admin access denied" | Verified ✓ Fixed in code |
-| "Garbled Telegram messages" | Verified ✓ Fixed in code |
-| Service won't start | Check: `journalctl -u nsebot -n 50` |
-| Health check fails | Verify `.env` has TELEGRAM_BOT_TOKEN, CLAUDE_API_KEY |
-| Memory near ceiling (1GB RAM) | Monitor: `watch -n 2 'free -h'` |
+| `ModuleNotFoundError` | `pip install -r requirements.txt` |
+| Service won't start | `journalctl -u nsebot -n 50` |
+| Health check fails | Verify `.env`: TELEGRAM_BOT_TOKEN, SARVAM_API_KEY |
+| No alerts firing | Check `ALERT_POLICY_MODE=ULTRA_STRICT_8PLUS` + source whitelist |
+| Memory near 1GB | Weekly flush at Sun 02:00 auto-handles; check `free -h` |
 
 ---
 
-## 📊 Resource Monitoring (VPS)
+## ✅ Post-Deploy Verification
 
 ```bash
-# CPU & Memory
-top -b -n 1 | head -20
-
-# Specific to nsebot
-ps aux | grep python
-
-# Disk & Swap
-df -h
-free -h
-
-# Service logs
-journalctl -u nsebot -f
-tail -f /root/nse2/logs/app.log
+systemctl is-active nsebot
+python -m nse_monitor.main --health
+tail -f /root/nse2/nse_monitor/logs/app.log
 ```
+
+Expected log:
+```
+Bulkbeat TV v2.0 - ASYNC OS BOOT
+Warmup complete. System entering high-trust monitoring mode.
+```
+
+- Admin bot: `/login <password>` → `/pulse`
+- Next morning report: tomorrow 08:30 IST (if trading day)
 
 ---
 
-## ✅ Verification Checklist
+## 🔄 Rollback
 
-After deployment:
-
-- [ ] Service is running: `systemctl is-active nsebot`
-- [ ] Health check passes: `python -m nse_monitor.main --health`
-- [ ] Logs show "Scheduler configured": `tail /root/nse2/logs/app.log`
-- [ ] Telegram bot responds to `/start` (in admin bot)
-- [ ] Admin access works: `/login <password>` → `/grant` command available
-- [ ] Pre-market report scheduled for tomorrow 08:30 IST
-
----
-
-## 🔄 Rollback (If Issues)
-
-### Restore Database Backup
-```bash
-cp /root/nse2/nse_monitor/data/backups/db_backup_YYYYMMDD_HHMMSS.db \
-   /root/nse2/nse_monitor/data/processed_announcements.db
-```
-
-### Stop Service
 ```bash
 systemctl stop nsebot
-```
-
-### Revert Code
-```bash
-cd /root/nse2
+cp nse_monitor/data/processed_announcements.db.backup \
+   nse_monitor/data/processed_announcements.db
 git checkout HEAD -- .
-```
-
-### Restart
-```bash
 systemctl start nsebot
 ```
 
 ---
 
-## 📞 Support Quick Links
+## 📞 Quick Links
 
-- **Logs:** `tail -f /root/nse2/logs/app.log`
-- **Config:** `cat /root/nse2/.env`
-- **Health:** `python -m nse_monitor.main --health`
-- **Status:** `systemctl status nsebot`
-- **Database:** `/root/nse2/nse_monitor/data/processed_announcements.db`
-
----
-
-**Last Updated:** Post Admin-Fix (v1.0 stable)  
-**Target:** Ubuntu 22.04 + Windows  
-**Tested:** ✓ Health checks pass, ✓ Admin access working, ✓ Encoding fixed
+| What | Command |
+|------|---------|
+| Logs | `tail -f /root/nse2/nse_monitor/logs/app.log` |
+| Health | `python -m nse_monitor.main --health` |
+| Status | `systemctl status nsebot` |
+| DB | `nse_monitor/data/processed_announcements.db` |

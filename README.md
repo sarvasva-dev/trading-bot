@@ -1,16 +1,26 @@
-# Market Pulse v1.3.3 (Institutional Pro)
+# Bulkbeat TV v2.0 (Institutional Pro)
 
-High-precision Indian market intelligence engine designed for Institutional-grade analysis. Engineered to run 24/7 on an optimized 1GB Linux VPS with zero-loss data ingestion and high-impact AI signal generation.
+High-precision Indian market intelligence engine. Fully async architecture engineered to run 24/7 on a 1GB Linux VPS with zero-loss data ingestion and ultra-strict AI signal generation.
 
-## 🏛️ v1.3.3 Institutional Features
-- **Professional Dashboard**: High-impact English UI designed for clarity and value perception.
-- **Pulse Monitoring**: Real-time server health monitoring (`/pulse`) including RAM, Disk, and DB stats.
-- **Campaign Tracking**: Native support for deep-linked marketing tags (e.g., `t.me/bot?start=ad_101`) to track conversion ROI.
-- **Industrial DB Scalability**: Powered by **SQLite WAL (Write-Ahead Logging)** with 30s busy-timeouts for high-concurrency workloads.
-- **Safe OCR Pipeline**: RAM-safe serial OCR processing (120 DPI) optimized for low-resource environments.
-- **Automated Hot-Backups**: Daily point-in-time database snapshots using the SQLite Online Backup API.
+## 🏛️ v2.0 Core Features
+- **Fully Async Engine**: `asyncio`-native core — no ThreadPool, no blocking I/O.
+- **5-Source Intelligence Pipeline**: NSE, NSE SME, Bulk Deals, Economic Times, Moneycontrol (ingest-only).
+- **AI Model**: Sarvam 30B (`sarvam-30b`) — 22-Rule Institutional Engine.
+- **Ultra-Strict Alert Policy (`ULTRA_STRICT_8PLUS`)**: Live alerts only for score ≥ 8 from whitelisted sources (NSE, NSE_SME, NSE_BULK).
+- **Smart Money Analysis**: Institutional flow detection triggered for signals scoring ≥ 7.
+- **Impact Tracker**: Post-alert price tracking to measure signal accuracy.
+- **Nudge Manager**: Automated re-engagement nudges for inactive subscribers.
+- **Symbol Cooldown**: 90-min per-symbol cooldown to prevent alert spam.
+- **Daily Alert Budget**: Soft target 5, hard cap 10 (score ≥ 9 bypasses cap).
+- **Post-Market Suppression**: After market hours, only score = 10 alerts fire.
+- **Pulse Monitoring**: `/pulse` — live RAM, Disk, DB stats via Admin Bot.
+- **Campaign Tracking**: Deep-linked referral tags (e.g. `t.me/bot?start=ad_101`).
+- **SQLite WAL Mode**: 30s busy-timeout for high-concurrency writes.
+- **Safe OCR Pipeline**: Serial Tesseract OCR at 120 DPI for RAM-constrained VPS.
+- **Automated Hot-Backups**: Daily SQLite Online Backup API snapshots (5 retained).
+- **Single-Instance Lock**: PID file guard prevents duplicate bot processes.
 
-## 🛠️ Deployment (Institutional Setup)
+## 🛠️ Deployment
 
 ### 1. System Preparation
 ```bash
@@ -21,27 +31,39 @@ sudo apt install python3-pip python3-venv git tesseract-ocr -y
 ### 2. Installation
 ```bash
 git clone <your_repo_url>
-cd <repo_dir>
-python3 -m venv venv
-home/user/venv/bin/pip install -r requirements.txt
+cd nse2
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 3. Environment Configuration (`.env`)
 ```env
-# 🛰️ Core API Keys
+# Core
 TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_ADMIN_BOT_TOKEN=your_admin_token
+TELEGRAM_ADMIN_CHAT_ID=your_admin_chat_id
 SARVAM_API_KEY=your_sarvam_key
 ADMIN_PASSWORD=your_dashboard_pass
 
-# 💳 Payment (Optional)
+# Alert Policy (optional overrides)
+ALERT_POLICY_MODE=ULTRA_STRICT_8PLUS
+DAILY_ALERT_HARD_CAP=10
+SYMBOL_COOLDOWN_MIN=90
+NEUTRAL_BLOCK=1
+ALLOWED_LIVE_SOURCES=NSE,NSE_SME,NSE_BULK
+
+# Payment (optional)
 RAZORPAY_KEY_ID=your_raz_key
 RAZORPAY_KEY_SECRET=your_raz_sec
 ```
 
-### 4. Service Management (Systemd)
-The bot is designed to run as a persistent background service.
+### 4. Database Migration
+```bash
+python migrate_v7.py
+```
 
+### 5. Service Management (Systemd)
 ```bash
 sudo cp nsebot.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -49,12 +71,13 @@ sudo systemctl enable nsebot
 sudo systemctl start nsebot
 ```
 
-## 📊 Operations & Auditing
-- **General Health**: Admin Bot command `/pulse`
-- **Signal Logs**: `data/logs/app.log` (Auto-rotating, Max 5MB)
+## 📊 Operations
+- **Health Check**: `python -m nse_monitor.main --health`
+- **Logs**: `nse_monitor/logs/app.log` (rotating, max 5MB × 3)
 - **Database**: `nse_monitor/data/processed_announcements.db`
-- **Backups**: `nse_monitor/data/backups/` (Auto-retained 5 copies)
-- **Billing Audit**: User Bot command `/hisab` (Institutional Daily Audit)
+- **Backups**: `nse_monitor/data/backups/` (5 copies retained)
+- **Admin Bot**: `/pulse`, `/broadcast`, `/grant`
+- **User Bot**: `/hisab` (billing audit), `/bulk`, `/upcoming`
 
 ## ⚖️ Disclaimer
-*Non-SEBI Research Tool. Content for educational purposes only. Market Pulse is an intelligence automation system; users assume all risk for financial decisions.*
+*Non-SEBI Research Tool. Educational purposes only. Users assume all risk for financial decisions.*

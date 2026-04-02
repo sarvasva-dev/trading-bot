@@ -11,7 +11,7 @@ from datetime import datetime
 import pytz
 
 print("\n" + "="*60)
-print("MARKET PULSE - PROJECT STATE AUDIT")
+print("BULKBEAT TV - PROJECT STATE AUDIT")
 print("="*60 + "\n")
 
 # 1. Database Status
