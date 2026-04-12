@@ -372,22 +372,23 @@ class MarketIntelligenceSystem:
             self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
             return False
 
-        if market_on and ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
+        # v5.0: Queue all market-off news for morning summary (8:30 AM)
+        # Signal messages sirf market hours (9 AM - 4 PM) mein hi bhejenge
+        if not market_on:
+            logger.info("Market closed: Queueing %s for morning summary (score: %s)", symbol, score)
+            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+            return False
+
+        # Market hours: Continue with existing alert logic
+        source_name = item.get("source", "").upper().strip()
+        if ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
             if score < 8 or not analysis.get("valid_event"):
                 return False
-            source_name = item.get("source", "").upper().strip()
             allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
             if source_name not in allowed:
                 logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
-
-        if not market_on and score < 10:
-            logger.info("Post-market suppression: %s score %s < 10", symbol, score)
-            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-            return False
-
-        source_name = item.get("source", "")
         # v4.3.2: Separate Ingestion (0.1 Cr) from Alerting (5.0 Cr)
         if source_name == "NSE_BULK":
             val = float(item.get("deal_value_cr", 0))
