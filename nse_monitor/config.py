@@ -22,6 +22,13 @@ TELEGRAM_ADMIN_BOT_TOKEN = os.getenv("TELEGRAM_ADMIN_BOT_TOKEN", "").strip()
 TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
 TELEGRAM_DOCUMENT_TIMEOUT_SEC = int(os.getenv("TELEGRAM_DOCUMENT_TIMEOUT_SEC", 45))
 
+# v2.1: Multiple Admin Support
+_admin_ids = os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "")
+TELEGRAM_ADMIN_CHAT_IDS = [cid.strip() for cid in _admin_ids.split(",") if cid.strip()]
+# Also include single admin chat ID in the list
+if TELEGRAM_ADMIN_CHAT_ID and TELEGRAM_ADMIN_CHAT_ID not in TELEGRAM_ADMIN_CHAT_IDS:
+    TELEGRAM_ADMIN_CHAT_IDS.append(TELEGRAM_ADMIN_CHAT_ID)
+
 # v2.0: Secure Authentication (Bcrypt)
 # Place the output of scripts/generate_hash.py into the environment
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "").strip()

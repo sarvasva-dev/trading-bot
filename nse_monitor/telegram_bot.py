@@ -9,7 +9,7 @@ import time
 import bcrypt
 from collections import defaultdict
 from datetime import datetime, timedelta
-from nse_monitor.config import BOT_NAME, ADMIN_SESSION_TIMEOUT_MINUTES, TELEGRAM_DOCUMENT_TIMEOUT_SEC, HEADERS
+from nse_monitor.config import BOT_NAME, ADMIN_SESSION_TIMEOUT_MINUTES, TELEGRAM_DOCUMENT_TIMEOUT_SEC, HEADERS, TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_ADMIN_CHAT_IDS
 from nse_monitor.payment_processor import RazorpayProcessor
 
 logger = logging.getLogger(__name__)
@@ -517,7 +517,12 @@ class TelegramBot:
             await self._send_raw(chat_id, "⏳ Transaction Pending. Try again in 5 mins.")
 
     def is_admin(self, chat_id):
-        session_time = self.admin_sessions.get(str(chat_id), 0)
+        cid = str(chat_id)
+        # 1. Owner bypass (checks both single ID and list)
+        if cid == TELEGRAM_ADMIN_CHAT_ID or cid in TELEGRAM_ADMIN_CHAT_IDS:
+            return True
+        # 2. In-memory session check (ephemeral)
+        session_time = self.admin_sessions.get(cid, 0)
         return (time.time() - session_time) < (ADMIN_SESSION_TIMEOUT_MINUTES * 60)
 
     async def _send_raw(self, chat_id, text, reply_markup=None, disable_web_page_preview=False):

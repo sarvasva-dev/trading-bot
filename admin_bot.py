@@ -10,7 +10,7 @@ import shutil
 from datetime import datetime
 import pytz
 import bcrypt
-from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, ADMIN_PASSWORD_HASH, BOT_NAME, TELEGRAM_BOT_TOKEN, ADMIN_SESSION_TIMEOUT_MINUTES
+from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_ADMIN_CHAT_IDS, ADMIN_PASSWORD_HASH, BOT_NAME, TELEGRAM_BOT_TOKEN, ADMIN_SESSION_TIMEOUT_MINUTES
 from nse_monitor.database import Database
 
 # Logging Setup
@@ -81,8 +81,9 @@ class AdminPanel:
 
     def is_admin(self, chat_id):
         cid = str(chat_id)
-        # 1. Owner bypass
-        if cid == self.owner_id: return True
+        # 1. Owner bypass (checks both single ID and list)
+        if cid == self.owner_id or cid in TELEGRAM_ADMIN_CHAT_IDS:
+            return True
         # 2. Database session check (Persistent & Shared)
         return self.db.is_admin_session_valid(cid, timeout_minutes=ADMIN_SESSION_TIMEOUT_MINUTES)
 
