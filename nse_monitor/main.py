@@ -12,6 +12,7 @@ import shutil
 import glob
 from datetime import datetime, timedelta
 import inspect
+import gc
 
 import aiohttp
 import pytz
@@ -150,6 +151,7 @@ class MarketIntelligenceSystem:
         self.alert_memory = {}
         self.memory_lock = asyncio.Lock()
         self.notifier = TelegramNotifier()
+        self.health_session = None # v5.2: Pooled session for diagnostic checks
         self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
         logger.info("================================================")
         logger.info("  Bulkbeat TV — Follow the Beat of Big Money")
@@ -305,38 +307,30 @@ class MarketIntelligenceSystem:
             logger.error("Health: Database writable [FAIL] (%s)", exc)
             return False
 
+        # v5.2: Use Pooled Health Session to prevent RAM-bloat from one-off sessions
+        if not self.health_session or self.health_session.closed:
+            self.health_session = aiohttp.ClientSession()
+
         # 2) Telegram reachability check
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.telegram.org", timeout=10) as resp:
-                    if resp.status != 200:
-                        logger.error("Health: Telegram network degraded [WARN] (HTTP %s)", resp.status)
-                        logger.warning(
-                            "Note: Text signals might work, but binary PDF uploads may fail or be throttled."
-                        )
-                    else:
-                        logger.info("Health: Telegram network reachable [OK] (HTTP 200)")
+            async with self.health_session.get("https://api.telegram.org", timeout=10) as resp:
+                if resp.status != 200:
+                    logger.error("Health: Telegram network degraded [WARN] (HTTP %s)", resp.status)
+                else:
+                    logger.info("Health: Telegram network reachable [OK]")
         except Exception as exc:
-            logger.error("Health: Telegram network blocked/throttled [FAIL] (%s)", exc)
-            logger.error("Note: Text may intermittently work, but binary PDF uploads may fail in this environment.")
+            logger.error("Health: Telegram network unreachable [FAIL] (%s)", exc)
             return False
 
-        # 3) Telegram auth check (getMe)
+        # 3) Telegram auth check
         try:
             url = f"{self.bot.base_url}/getMe"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as resp:
-                    body = await resp.text()
-                    if resp.status == 200:
-                        logger.info("Health: Telegram reachable + auth ok [OK]")
-                    elif resp.status in (401, 403):
-                        logger.error("Health: Telegram reachable but auth/token fail [FAIL] (HTTP %s)", resp.status)
-                        logger.error("Telegram response: %s", body[:400])
-                        return False
-                    else:
-                        logger.error("Health: Telegram reachable but API error [FAIL] (HTTP %s)", resp.status)
-                        logger.error("Telegram response: %s", body[:400])
-                        return False
+            async with self.health_session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    logger.info("Health: Telegram bot authentication [OK]")
+                else:
+                    logger.error("Health: Telegram auth failed [FAIL] (HTTP %s)", resp.status)
+                    return False
         except Exception as exc:
             logger.error("Health: Telegram auth check [FAIL] (%s)", exc)
             return False
@@ -403,7 +397,9 @@ class MarketIntelligenceSystem:
 
         analyzed_count = len([r for r in results if r is not None])
         logger.info("Intelligence: analyzed=%s", analyzed_count)
-        return any(results)
+        result = any(results)
+        gc.collect() # v5.2: Force RAM recovery after heavy processing
+        return result
 
     async def _process_single_item(self, item, market_on):
         news_id = item["db_id"]

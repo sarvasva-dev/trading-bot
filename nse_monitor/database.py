@@ -18,6 +18,8 @@ class Database:
             self.lock = threading.Lock()
             # v1.3.2: Increased busy timeout for high-concurrency scalability
             self.conn.execute("PRAGMA busy_timeout = 30000")
+            # v5.2: Memory Capping (Locking cache at 2MB for Low-RAM VPS)
+            self.conn.execute("PRAGMA cache_size = -2000")
             # Test connection immediately
             self.conn.execute("SELECT 1")
             self._create_table()

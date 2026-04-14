@@ -102,15 +102,14 @@ class MarketScheduler:
             id='pre_market_report'
         )
 
-        # 3. Weekly Memory Flush (Sun 02:00)
+        # 3. Daily Memory Flush (04:00 IST)
         import os
         self.scheduler.add_job(
             lambda: os._exit(0),
             'cron',
-            day_of_week='sun',
-            hour=2,
+            hour=4,
             minute=0,
-            id='weekly_memory_flush'
+            id='daily_memory_flush'
         )
 
         # 4. Auto-Verify Payments (Every 5 minutes)

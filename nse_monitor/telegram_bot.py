@@ -46,6 +46,7 @@ class TelegramBot:
         self.ist = pytz.timezone("Asia/Kolkata")
         self.session = None # Async session, will be created on demand
         self._sync_task = None
+        self.broadcast_semaphore = asyncio.Semaphore(30) # v5.2: Parallel dispatch cap
         self._initialized = False
 
     async def ensure_session(self):
@@ -571,12 +572,16 @@ class TelegramBot:
             return False, str(e)
 
     async def send_report(self, report_text):
-        """Sends a structured pre-market report to active users (Async)."""
+        """v5.2: Parallel Signal Dispatch Engine (Faster delivery)."""
         if not self.token: return
         active_users = self.db.get_active_users() if self.db else []
-        for chat_id in active_users:
-            await self._send_raw(chat_id, report_text, disable_web_page_preview=True)
-            await asyncio.sleep(0.05)
+        
+        async def _send_one(cid):
+            async with self.broadcast_semaphore:
+                return await self._send_raw(cid, report_text, disable_web_page_preview=True)
+
+        # Dispatch all in parallel with semaphore throttling
+        await asyncio.gather(*[_send_one(cid) for cid in active_users])
         logger.info(f"Broadcasted report to {len(active_users)} active users.")
 
     async def send_signal(self, item, analysis, pdf_path=None):
@@ -609,16 +614,26 @@ class TelegramBot:
         )
 
         active_users = self.db.get_active_users() if self.db else []
-        for chat_id in active_users:
-            await self._send_raw(chat_id, message, disable_web_page_preview=True)
-            
-            if pdf_path and os.path.exists(pdf_path):
-                file_size = os.path.getsize(pdf_path) / (1024 * 1024)
-                if file_size < 5:
-                    caption = f"Filings: {symbol.upper()} | Score: {impact_score}/10"
-                    await self._send_document(chat_id, pdf_path, caption=caption)
-            
-            await asyncio.sleep(0.05)
+        
+        async def _dispatch_one(chat_id):
+            async with self.broadcast_semaphore:
+                # 1. Send text signal
+                await self._send_raw(chat_id, message, disable_web_page_preview=True)
+                
+                # 2. Attach PDF if applicable
+                if pdf_path and os.path.exists(pdf_path):
+                    try:
+                        file_size = os.path.getsize(pdf_path) / (1024 * 1024)
+                        if file_size < 5:
+                            caption = f"Filings: {symbol.upper()} | Score: {impact_score}/10"
+                            await self._send_document(chat_id, pdf_path, caption=caption)
+                    except: pass
+                
+                # Small jitter to stay within global Telegram rate limits (30/sec)
+                await asyncio.sleep(0.03)
+
+        # Fire all parallel tasks
+        await asyncio.gather(*[_dispatch_one(cid) for cid in active_users])
         return True
 
     @rate_limit(max_calls=10, period=60)
