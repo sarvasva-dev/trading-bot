@@ -38,6 +38,15 @@ class MarketScheduler:
         if sent:
             self.system.db.set_config("last_pre_market_report_date", report_day)
 
+    async def _run_morning_signal_dispatch(self):
+        """Dispatches individually queued signals at 08:30 AM (v5.0)."""
+        now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        if not TradingCalendar.is_trading_day(now):
+            return
+            
+        logger.info("Morning Dispatch Job: Starting individual signal broadcast.")
+        await self.system.send_queued_signals()
+
     async def _maybe_send_startup_catchup_report(self):
         """If bot starts after 08:30 but before market open, send report immediately."""
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
@@ -51,8 +60,10 @@ class MarketScheduler:
         if self.system.db.get_config("last_pre_market_report_date", "") == report_day:
             return
 
-        logger.warning("Startup catch-up: dispatching delayed pre-market report for %s.", report_day)
+        logger.warning("Startup catch-up: dispatching delayed pre-market reports AND signals for %s.", report_day)
+        await self._run_morning_signal_dispatch() # v5.1 Fix
         await self._run_pre_market_report()
+
 
     async def safe_run_cycle(self):
         """Wraps the intelligence cycle in crash protection (Async)."""
@@ -139,6 +150,18 @@ class MarketScheduler:
         )
 
         logger.info("Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.")
+        
+        # 8. Morning Signal Dispatch (08:30 IST)
+        # We run this alongside the report to ensure all intel hits at once
+        self.scheduler.add_job(
+            self._run_morning_signal_dispatch,
+            'cron',
+            day_of_week='mon-fri',
+            hour=8,
+            minute=30,
+            id='morning_signal_dispatch'
+        )
+
         self.scheduler.start()
         await self._maybe_send_startup_catchup_report()
 

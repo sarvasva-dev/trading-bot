@@ -167,7 +167,9 @@ class MarketIntelligenceSystem:
         now = datetime.now(self.ist)
         if not TradingCalendar.is_trading_day(now):
             return False
-        return 9 <= now.hour < 16
+        # v5.1: Live Signals from 8:30 AM to 4:30 PM (Pre-market + Market + Post-market)
+        curr_min = now.hour * 60 + now.minute
+        return 510 <= curr_min < 990  # 08:30 to 16:30
 
     async def eod_billing(self):
         now = datetime.now(self.ist)
@@ -228,6 +230,68 @@ class MarketIntelligenceSystem:
                 send_result = self.bot._send_raw(chat_id, f"Payment success. {days_added} market days added.")
                 if inspect.isawaitable(send_result):
                     await send_result
+
+    async def send_queued_signals(self):
+        """v5.1: High-integrity dispatch for overnight qualified news (status=3)."""
+        now_dt = datetime.now(self.ist).date()
+        
+        # 1. Budget Reset (Mandatory for clean slate)
+        if self.last_budget_reset != now_dt:
+            logger.info(f"Morning Dispatch: Resetting daily alert budget (Old date: {self.last_budget_reset})")
+            self.daily_alerts_count = 0
+            self.last_budget_reset = now_dt
+            self.cooldowns = {}
+
+        logger.info("Morning Dispatch: Scanning for Status=3 queued items...")
+        queued_items = self.db.get_queued_news(hours=72)
+        
+        if not queued_items:
+            logger.info("Morning Dispatch: Queue empty.")
+            return
+
+        logger.info(f"Morning Dispatch: Broadcasting {len(queued_items)} qualified signals.")
+        
+        for item in queued_items:
+            news_id = item["id"]
+            symbol = item["symbol"]
+            score = item["impact_score"]
+            sentiment = item["sentiment"]
+            
+            analysis = {
+                "symbol": symbol,
+                "impact_score": score,
+                "sentiment": sentiment,
+                "trigger": item.get("trigger", "N/A"),
+                "sector": item.get("perspective", "N/A"),
+                "valid_event": True
+            }
+            
+            try:
+                # Dispatch Signal
+                send_result = self.bot.send_signal(item, analysis)
+                if inspect.isawaitable(send_result):
+                    await send_result
+                
+                # Register in system
+                self.db.mark_alert_sent(news_id)
+                self.db.mark_analysis_complete(
+                    news_id, score, sentiment, 
+                    trigger=item.get("trigger"), 
+                    perspective=item.get("perspective"), 
+                    alerted=True,
+                    status=2
+                )
+                
+                self.daily_alerts_count += 1
+                self.cooldowns[symbol] = time.time()
+                
+                logger.info(f"Morning Dispatch: Sent {symbol} signal.")
+                await asyncio.sleep(1.5) # Flood protection
+                
+            except Exception as e:
+                logger.error(f"Morning Dispatch: Failed for {symbol}: {e}")
+
+        logger.info("Morning Dispatch: Sequence completed.")
 
     async def health_check(self):
         """Pre-flight system validation with explicit Telegram network diagnostics."""
@@ -372,12 +436,8 @@ class MarketIntelligenceSystem:
             self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
             return False
 
-        # v5.0: Queue all market-off news for morning summary (8:30 AM)
-        # Signal messages sirf market hours (9 AM - 4 PM) mein hi bhejenge
-        if not market_on:
-            logger.info("Market closed: Queueing %s for morning summary (score: %s)", symbol, score)
-            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-            return False
+        # v5.1: Analysis filters now run globally. 
+        # Queuing vs Live Dispatch decision is made at the final stage.
 
         # Market hours: Continue with existing alert logic
         source_name = item.get("source", "").upper().strip()
@@ -425,24 +485,34 @@ class MarketIntelligenceSystem:
                     self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                     return False
 
-        smart_money = None
         if score >= 7:
             smart_money = await self.analyzer.analyze_smart_money(symbol)
             if smart_money:
                 analysis["smart_money"] = smart_money
 
-        should_send = market_on or score >= 9
-        if should_send:
-            send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
-            if inspect.isawaitable(send_result):
-                await send_result
-            self.db.mark_alert_sent(news_id)
-            self.daily_alerts_count += 1
-            self.cooldowns[symbol] = now_ts
-            logger.info("Dispatched #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
+        # v5.1: Final Dispatch Logic
+        if not market_on:
+            logger.info("Market session inactive: Queuing %s for morning dispatch (status=3)", symbol)
+            self.db.mark_analysis_complete(
+                news_id, score, sentiment,
+                trigger=analysis.get("trigger"),
+                perspective=analysis.get("sector"),
+                alerted=False,
+                status=3
+            )
+            return False
 
-            if market_on:
-                asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
+        # MARKET ON: LIVE SIGNAL
+        send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
+        if inspect.isawaitable(send_result):
+            await send_result
+        self.db.mark_alert_sent(news_id)
+        self.daily_alerts_count += 1
+        self.cooldowns[symbol] = now_ts
+        logger.info("Dispatched LIVE #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
+
+        if market_on:
+            asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
 
         self.db.mark_analysis_complete(
             news_id,

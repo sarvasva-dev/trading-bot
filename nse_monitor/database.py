@@ -411,9 +411,10 @@ class Database:
             for r in rows
         ]
 
-    def mark_analysis_complete(self, news_id, impact_score, sentiment, trigger=None, perspective=None, alerted=False):
-        """v1.0: Updates a news item as Analyzed (status=1) or Alerted (status=2)."""
-        status = 2 if alerted else 1
+    def mark_analysis_complete(self, news_id, impact_score, sentiment, trigger=None, perspective=None, alerted=False, status=None):
+        """v1.0: Updates a news item as Analyzed (status=1) or Alerted (status=2) or Queued (status=3)."""
+        if status is None:
+            status = 2 if alerted else 1
         try:
             with self.lock:
                 with self.conn:
@@ -822,13 +823,43 @@ class Database:
             """SELECT id, headline, summary, impact_score, url, source, symbol 
                FROM news_items 
                WHERE created_at > datetime('now', ?) 
-               AND processing_status IN (1, 2) 
+               AND processing_status IN (1, 2, 3) 
                AND impact_score >= ? 
                AND impact_score IS NOT NULL
                ORDER BY impact_score DESC, created_at DESC""",
             (f"-{hours} hours", min_score)
         )
         return [{"id": row[0], "headline": row[1], "summary": row[2], "impact_score": row[3], "url": row[4], "source": row[5], "symbol": row[6]} for row in cursor.fetchall()]
+
+    def get_queued_news(self, hours=72):
+        """v5.0: Fetches news that was analyzed and qualified but queued (status=3). Use for morning dispatch."""
+        cursor = self.conn.cursor()
+        # Fetch status=3 (Qualified and Queued)
+        cursor.execute(
+            """SELECT id, headline, summary, impact_score, url, source, symbol, sentiment, trigger, perspective
+               FROM news_items 
+               WHERE created_at > datetime('now', ?) 
+               AND processing_status = 3
+               ORDER BY created_at ASC""",
+            (f"-{hours} hours",)
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": row[0], "headline": row[1], "summary": row[2], 
+                "impact_score": row[3], "url": row[4], "source": row[5], 
+                "symbol": row[6], "sentiment": row[7], "trigger": row[8],
+                "perspective": row[9]
+            } 
+            for row in rows
+        ]
+
+    def get_pending_news_count(self):
+        """v2.0: Returns the number of news items waiting for AI processing (status=0)."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM news_items WHERE processing_status = 0")
+        return cursor.fetchone()[0]
+
 
     def get_all_user_ids(self):
         """v4.0: Returns all chat IDs for cache reconciliation on boot."""
