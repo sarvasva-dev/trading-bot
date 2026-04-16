@@ -26,7 +26,7 @@ from nse_monitor.nudge_manager import NudgeManager
 from nse_monitor.pdf_processor import PDFProcessor
 from nse_monitor.report_builder import ReportBuilder
 from nse_monitor.scheduler import MarketScheduler
-from nse_monitor.sources.bulk_deal_source import BulkDealSource
+# from nse_monitor.sources.bulk_deal_source import BulkDealSource
 from nse_monitor.sources.economic_times_source import EconomicTimesSource
 from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
 from nse_monitor.sources.nse_sme_source import NseSmeSource
@@ -145,7 +145,7 @@ class MarketIntelligenceSystem:
             NseSmeSource(client=self.nse_client),
             EconomicTimesSource(),
             MoneycontrolSource(),
-            BulkDealSource(nse_client=self.nse_client),
+            # BulkDealSource(nse_client=self.nse_client), # v5.2.3: Disabled per user request
         ]
 
         self.alert_memory = {}
@@ -318,6 +318,7 @@ class MarketIntelligenceSystem:
                     logger.error("Health: Telegram network degraded [WARN] (HTTP %s)", resp.status)
                 else:
                     logger.info("Health: Telegram network reachable [OK]")
+                await resp.release()
         except Exception as exc:
             logger.error("Health: Telegram network unreachable [FAIL] (%s)", exc)
             return False
@@ -331,6 +332,7 @@ class MarketIntelligenceSystem:
                 else:
                     logger.error("Health: Telegram auth failed [FAIL] (HTTP %s)", resp.status)
                     return False
+                await resp.release()
         except Exception as exc:
             logger.error("Health: Telegram auth check [FAIL] (%s)", exc)
             return False
@@ -406,119 +408,126 @@ class MarketIntelligenceSystem:
         from nse_monitor.config import ALERT_POLICY_MODE, ALLOWED_LIVE_SOURCES, DAILY_ALERT_HARD_CAP, NEUTRAL_BLOCK, SYMBOL_COOLDOWN_MIN
 
         pdf_path = None
-        if item.get("url") and ".pdf" in item["url"].lower():
-            try:
-                loop = asyncio.get_event_loop()
-                pdf_path = await loop.run_in_executor(None, lambda: self.pdf_processor.download_pdf(item["url"]))
-                text = await loop.run_in_executor(None, lambda: self.pdf_processor.extract_text(pdf_path))
-                if text and len(text) > 100:
-                    item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:3000]}"
-            except Exception:
-                pass
+        try:
+            if item.get("url") and ".pdf" in item["url"].lower():
+                try:
+                    loop = asyncio.get_event_loop()
+                    pdf_path = await loop.run_in_executor(None, lambda: self.pdf_processor.download_pdf(item["url"]))
+                    text = await loop.run_in_executor(None, lambda: self.pdf_processor.extract_text(pdf_path))
+                    if text and len(text) > 100:
+                        item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:3000]}"
+                except Exception:
+                    pass
 
-        analysis = await self.llm_processor.analyze_single_event(
-            [item], market_status="OPEN" if market_on else "CLOSED", source_name=item.get("source")
-        )
-        if not analysis:
-            self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
-            return None
+            analysis = await self.llm_processor.analyze_single_event(
+                [item], market_status="OPEN" if market_on else "CLOSED", source_name=item.get("source")
+            )
+            if not analysis:
+                self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
+                return None
 
-        score = int(analysis.get("impact_score", 0))
-        symbol = str(analysis.get("symbol", "N/A")).upper()
-        sentiment = analysis.get("sentiment", "Neutral")
+            score = int(analysis.get("impact_score", 0))
+            symbol = str(analysis.get("symbol", "N/A")).upper()
+            sentiment = analysis.get("sentiment", "Neutral")
 
-        if NEUTRAL_BLOCK and sentiment == "Neutral":
-            logger.info("Policy block: neutral sentiment for %s", symbol)
-            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-            return False
-
-        # v5.1: Analysis filters now run globally. 
-        # Queuing vs Live Dispatch decision is made at the final stage.
-
-        # Market hours: Continue with existing alert logic
-        source_name = item.get("source", "").upper().strip()
-        if ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
-            if score < 8 or not analysis.get("valid_event"):
-                return False
-            allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
-            if source_name not in allowed:
-                logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
-                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-                return False
-        # v4.3.2: Separate Ingestion (0.1 Cr) from Alerting (5.0 Cr)
-        if source_name == "NSE_BULK":
-            val = float(item.get("deal_value_cr", 0))
-            if val < 5.0:
-                logger.info("Bulk suppression: %s value ₹%s Cr < ₹5 Cr", symbol, val)
+            if NEUTRAL_BLOCK and sentiment == "Neutral":
+                logger.info("Policy block: neutral sentiment for %s", symbol)
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
 
-        if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
-            logger.info("Media suppression: %s is ingest-only", symbol)
-            self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-            return False
-
-        if market_on and self.daily_alerts_count >= DAILY_ALERT_HARD_CAP:
-            if score < 9:
-                logger.warning(
-                    "Budget exhausted (%s/%s). Suppression: %s",
-                    self.daily_alerts_count,
-                    DAILY_ALERT_HARD_CAP,
-                    symbol,
-                )
-                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-                return False
-            logger.info("[CAP_BYPASS_9_10] Emergency signal for %s (%s/10)", symbol, score)
-
-        now_ts = time.time()
-        if symbol in self.cooldowns:
-            gap = (now_ts - self.cooldowns[symbol]) / 60
-            if gap < SYMBOL_COOLDOWN_MIN:
-                if score >= 9:
-                    logger.info("[BYPASS_COOLDOWN] Priority alert for %s (%s/10)", symbol, score)
-                else:
-                    logger.info("Cooldown hit: %s (%s min)", symbol, int(gap))
+            # v4.3.2: Separate Ingestion (0.1 Cr) from Alerting (5.0 Cr)
+            source_name = item.get("source", "").upper().strip()
+            if ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
+                if score < 8 or not analysis.get("valid_event"):
+                    return False
+                allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
+                if source_name not in allowed:
+                    logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
                     self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                     return False
+            
+            # v5.2.3: Removal of khusus source suppression logic
+            # if source_name == "NSE_BULK":
+            #     val = float(item.get("deal_value_cr", 0))
+            #     if val < 5.0:
+            #         logger.info("Bulk suppression: %s value ₹%s Cr < ₹5 Cr", symbol, val)
+            #         self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+            #         return False
 
-        if score >= 7:
-            smart_money = await self.analyzer.analyze_smart_money(symbol)
-            if smart_money:
-                analysis["smart_money"] = smart_money
+            if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
+                logger.info("Media suppression: %s is ingest-only", symbol)
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
 
-        # v5.1: Final Dispatch Logic
-        if not market_on:
-            logger.info("Market session inactive: Queuing %s for morning dispatch (status=3)", symbol)
+            if market_on and self.daily_alerts_count >= DAILY_ALERT_HARD_CAP:
+                if score < 9:
+                    logger.warning(
+                        "Budget exhausted (%s/%s). Suppression: %s",
+                        self.daily_alerts_count,
+                        DAILY_ALERT_HARD_CAP,
+                        symbol,
+                    )
+                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                    return False
+                logger.info("[CAP_BYPASS_9_10] Emergency signal for %s (%s/10)", symbol, score)
+
+            now_ts = time.time()
+            if symbol in self.cooldowns:
+                gap = (now_ts - self.cooldowns[symbol]) / 60
+                if gap < SYMBOL_COOLDOWN_MIN:
+                    if score >= 9:
+                        logger.info("[BYPASS_COOLDOWN] Priority alert for %s (%s/10)", symbol, score)
+                    else:
+                        logger.info("Cooldown hit: %s (%s min)", symbol, int(gap))
+                        self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                        return False
+
+            if score >= 7:
+                smart_money = await self.analyzer.analyze_smart_money(symbol)
+                if smart_money:
+                    analysis["smart_money"] = smart_money
+
+            # v5.1: Final Dispatch Logic
+            if not market_on:
+                logger.info("Market session inactive: Queuing %s for morning dispatch (status=3)", symbol)
+                self.db.mark_analysis_complete(
+                    news_id, score, sentiment,
+                    trigger=analysis.get("trigger"),
+                    perspective=analysis.get("sector"),
+                    alerted=False,
+                    status=3
+                )
+                return False
+
+            # MARKET ON: LIVE SIGNAL
+            send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
+            if inspect.isawaitable(send_result):
+                await send_result
+            self.db.mark_alert_sent(news_id)
+            self.daily_alerts_count += 1
+            self.cooldowns[symbol] = now_ts
+            logger.info("Dispatched LIVE #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
+
+            if market_on:
+                asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
+
             self.db.mark_analysis_complete(
                 news_id, score, sentiment,
                 trigger=analysis.get("trigger"),
                 perspective=analysis.get("sector"),
-                alerted=False,
-                status=3
+                alerted=True,
             )
-            return False
+            return analysis
+        finally:
+            # v5.2.2: Managed Deletion ONLY after all processing (including dispatch) is finished
+            if pdf_path and os.path.exists(pdf_path):
+                try:
+                    os.remove(pdf_path)
+                    logger.debug(f"Managed cleanup: Deleted {pdf_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete temp PDF: {e}")
 
-        # MARKET ON: LIVE SIGNAL
-        send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
-        if inspect.isawaitable(send_result):
-            await send_result
-        self.db.mark_alert_sent(news_id)
-        self.daily_alerts_count += 1
-        self.cooldowns[symbol] = now_ts
-        logger.info("Dispatched LIVE #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
-
-        if market_on:
-            asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
-
-        self.db.mark_analysis_complete(
-            news_id,
-            score,
-            sentiment,
-            trigger=analysis.get("trigger"),
-            perspective=analysis.get("sector"),
-            alerted=should_send,
-        )
-        return analysis
+        # return analysis (v5.2.3: Removed redundant return)
 
 
 async def main():

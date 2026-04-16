@@ -176,10 +176,27 @@ OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE. NO MARKDOWN.
 class LLMProcessor:
     def __init__(self):
         self.sarvam_key = SARVAM_API_KEY
+        self.session = None
+        self.lock = asyncio.Lock()
         if self.sarvam_key:
             logger.info("✅ AI Engine (Sarvam Async Core): Ready — 22-Rule Mode Active")
         else:
             logger.error("SARVAM_API_KEY is missing in .env")
+
+    async def ensure_session(self):
+        """Ensures a pooled aiohttp session is active."""
+        if self.session is None or self.session.closed:
+            async with self.lock:
+                if self.session is None or self.session.closed:
+                    self.session = aiohttp.ClientSession()
+                    logger.debug("AI Engine: Persistent session created.")
+        return self.session
+
+    async def close(self):
+        """Closes the persistent session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.info("AI Engine: Persistent session closed.")
 
     async def analyze_single_event(self, event_group, market_status="CLOSED", source_name="NSE"):
         """Analyzes a single event using the full 22-Rule Institutional Engine (Async)."""
@@ -243,28 +260,28 @@ class LLMProcessor:
             "temperature": 0.1
         }
         
-        async with aiohttp.ClientSession() as session:
-            for attempt in range(3):
-                try:
-                    logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/3)...")
-                    async with session.post(url, headers=headers, json=payload, timeout=60) as r:
-                        if r.status != 200:
-                            logger.error(f"Sarvam API Error: {r.status}")
-                            if attempt < 2: await asyncio.sleep(2 ** attempt)
-                            continue
-                            
-                        data = await r.json()
-                        content_raw = data['choices'][0]['message']['content']
+        await self.ensure_session()
+        for attempt in range(3):
+            try:
+                logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/3)...")
+                async with self.session.post(url, headers=headers, json=payload, timeout=60) as r:
+                    if r.status != 200:
+                        logger.error(f"Sarvam API Error: {r.status}")
+                        if attempt < 2: await asyncio.sleep(2 ** attempt)
+                        continue
+                        
+                    data = await r.json()
+                    content_raw = data['choices'][0]['message']['content']
 
-                        if not content_raw:
-                            logger.warning("Sarvam returned empty response.")
-                            return None
+                    if not content_raw:
+                        logger.warning("Sarvam returned empty response.")
+                        return None
 
-                        return self._robust_json_parse(content_raw)
+                    return self._robust_json_parse(content_raw)
 
-                except Exception as e:
-                    logger.error(f"Sarvam AI attempt {attempt + 1} failed: {e}")
-                    if attempt < 2: await asyncio.sleep(2 ** attempt)
+            except Exception as e:
+                logger.error(f"Sarvam AI attempt {attempt + 1} failed: {e}")
+                if attempt < 2: await asyncio.sleep(2 ** attempt)
             
         return None
 

@@ -131,12 +131,9 @@ class PDFProcessor:
             logger.error(f"Failed to extract text from {pdf_path}: {e}")
             return ""
         finally:
-            try:
-                if os.path.exists(pdf_path):
-                    os.remove(pdf_path)
-                    logger.debug(f"Memory cleanup: Deleted {pdf_path}")
-            except Exception as cleanup_err:
-                logger.warning(f"Failed to delete {pdf_path}: {cleanup_err}")
+            # v5.2.2: Removed auto-deletion here. 
+            # The caller (main.py) is now responsible for cleanup after dispatch.
+            pass
 
     def _extract_text_ocr(self, pdf_path, max_pages=2):
         """v1.3.2: Safe OCR implementation with global lock & RAM optimization."""

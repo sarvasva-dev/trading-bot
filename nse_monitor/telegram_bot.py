@@ -190,8 +190,8 @@ class TelegramBot:
                                 match = re.search(r'(pl_[a-zA-Z0-9]+)', text)
                                 link_id = match.group(1) if match else None
                                 await self._handle_check_payment(chat_id, link_id)
-                            elif text == "/bulk":
-                                await self._handle_bulk_deals(chat_id)
+                            # elif text == "/bulk":
+                            #     await self._handle_bulk_deals(chat_id)
                             elif text == "/upcoming":
                                 await self._handle_upcoming(chat_id)
                             elif text == "/status":
@@ -578,7 +578,9 @@ class TelegramBot:
         
         async def _send_one(cid):
             async with self.broadcast_semaphore:
-                return await self._send_raw(cid, report_text, disable_web_page_preview=True)
+                res = await self._send_raw(cid, report_text, disable_web_page_preview=True)
+                await asyncio.sleep(1.0) # v5.2: Strict throttling for Semaphore(30)
+                return res
 
         # Dispatch all in parallel with semaphore throttling
         await asyncio.gather(*[_send_one(cid) for cid in active_users])
@@ -629,8 +631,9 @@ class TelegramBot:
                             await self._send_document(chat_id, pdf_path, caption=caption)
                     except: pass
                 
-                # Small jitter to stay within global Telegram rate limits (30/sec)
-                await asyncio.sleep(0.03)
+                # Strict throttling to stay within global Telegram rate limits (30/sec)
+                # With Semaphore(30), a 1s sleep ensures exactly 30 msg/sec.
+                await asyncio.sleep(1.0)
 
         # Fire all parallel tasks
         await asyncio.gather(*[_dispatch_one(cid) for cid in active_users])
@@ -694,40 +697,40 @@ class TelegramBot:
         msg += "⚖️ <i>Internal Ledger transparency verified.</i>"
         await self._send_raw(chat_id, msg)
 
-    @rate_limit(max_calls=5, period=120) # Stricter limit for heavy NSE scraping
-    async def _handle_bulk_deals(self, chat_id):
-        """Fetches bulk deals and always replies (live or cached)."""
-        await self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals...</b>")
-        try:
-            if not self.nse_client: return
-            now = datetime.now(self.ist)
-            date_str = now.strftime("%d-%m-%Y")
-            url = f"https://www.nseindia.com/api/historicalOR/bulk-block-short-deals?optionType=bulk_deals&from={date_str}&to={date_str}"
-            data = await self.nse_client.get_json(url, referer="https://www.nseindia.com/report-detail/display-bulk-and-block-deals")
-            deals = data.get("data", []) if data else []
+    # @rate_limit(max_calls=5, period=120) # Stricter limit for heavy NSE scraping
+    # async def _handle_bulk_deals(self, chat_id):
+    #     """Fetches bulk deals and always replies (live or cached)."""
+    #     await self._send_raw(chat_id, "⏳ <b>Fetching today's bulk deals...</b>")
+    #     try:
+    #         if not self.nse_client: return
+    #         now = datetime.now(self.ist)
+    #         date_str = now.strftime("%d-%m-%Y")
+    #         url = f"https://www.nseindia.com/api/historicalOR/bulk-block-short-deals?optionType=bulk_deals&from={date_str}&to={date_str}"
+    #         data = await self.nse_client.get_json(url, referer="https://www.nseindia.com/report-detail/display-bulk-and-block-deals")
+    #         deals = data.get("data", []) if data else []
 
-            if not deals:
-                await self._send_raw(chat_id, "ℹ️ <b>No Bulk Deals reported so far today.</b>\nCheck back after market hours (4:30 PM).")
-                return
+    #         if not deals:
+    #             await self._send_raw(chat_id, "ℹ️ <b>No Bulk Deals reported so far today.</b>\nCheck back after market hours (4:30 PM).")
+    #             return
 
-            msg = "📈 <b>TODAY'S BIG DEALS (Live)</b>\n────────────────────────\n"
-            for d in deals[:10]:
-                symbol = d.get("BD_SYMBOL", d.get("symbol", "N/A"))
-                client = d.get("BD_CLIENT_NAME", d.get("clientName", "Unknown"))
-                bs = d.get("BD_BUY_SELL", d.get("buySellFlag", "BUY"))
-                qty = int(d.get("BD_QTY_TRD", d.get("quantityTraded", 0)))
-                price = float(d.get("BD_TP_WATP", d.get("tradePrice", 0)))
-                val_cr = (qty * price) / 1_00_00_000
+    #         msg = "📈 <b>TODAY'S BIG DEALS (Live)</b>\n────────────────────────\n"
+    #         for d in deals[:10]:
+    #             symbol = d.get("BD_SYMBOL", d.get("symbol", "N/A"))
+    #             client = d.get("BD_CLIENT_NAME", d.get("clientName", "Unknown"))
+    #             bs = d.get("BD_BUY_SELL", d.get("buySellFlag", "BUY"))
+    #             qty = int(d.get("BD_QTY_TRD", d.get("quantityTraded", 0)))
+    #             price = float(d.get("BD_TP_WATP", d.get("tradePrice", 0)))
+    #             val_cr = (qty * price) / 1_00_00_000
                 
-                icon = "🟢" if bs == "BUY" else "🔴"
-                msg += f"{icon} <b>{symbol}</b> | {client}\n"
-                msg += f"   {bs} {qty:,} @ ₹{price:.1f} (₹{val_cr:.1f} Cr)\n\n"
+    #             icon = "🟢" if bs == "BUY" else "🔴"
+    #             msg += f"{icon} <b>{symbol}</b> | {client}\n"
+    #             msg += f"   {bs} {qty:,} @ ₹{price:.1f} (₹{val_cr:.1f} Cr)\n\n"
             
-            msg += "────────────────────────\n💡 <i>Real-time Institutional Flow</i>"
-            await self._send_raw(chat_id, msg)
-        except Exception as e:
-            logger.error(f"Bulk deal fetch failed: {e}")
-            await self._send_raw(chat_id, "⚠️ Error fetching NSE data.")
+    #         msg += "────────────────────────\n💡 <i>Real-time Institutional Flow</i>"
+    #         await self._send_raw(chat_id, msg)
+    #     except Exception as e:
+    #         logger.error(f"Bulk deal fetch failed: {e}")
+    #         await self._send_raw(chat_id, "⚠️ Error fetching NSE data.")
 
     @rate_limit(max_calls=5, period=60)
     async def _handle_upcoming(self, chat_id):
