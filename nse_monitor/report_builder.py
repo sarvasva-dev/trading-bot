@@ -1,4 +1,4 @@
-﻿import pytz
+import pytz
 import asyncio
 import os
 import logging
@@ -15,7 +15,7 @@ class ReportBuilder:
         self.db = db
         self.llm_processor = llm_processor
         self.global_source = GlobalSource()
-        self.bulk_source = BulkDealSource()
+        # self.bulk_source = BulkDealSource() # v5.2.4: Disabled Bulk system
 
     async def generate_morning_report(self):
         """v4.0: Instrumented Generation with Observability (Async)."""
@@ -50,7 +50,7 @@ class ReportBuilder:
         # Fetch only processed/analyzed high-impact items
         all_news = self.db.get_recent_analyzed_news(hours=hours, min_score=1)
         global_intel = await self.global_source.fetch_indices()
-        bulk_intel = await self.bulk_source.get_deals_for_report()
+        # bulk_intel = await self.bulk_source.get_deals_for_report() # v5.2.4: Disabled
         
         # v2.0: AI Summarization using async LLM processor
         ai_res = {}
@@ -88,35 +88,8 @@ class ReportBuilder:
             report.append(f"<b>{idx}. {item['headline']}</b>")
             report.append(f"-> <a href='{url}'>Reference Filing</a>")
 
-        # 4. Bulk & Block Deals (v4.2.1: Truthful Recap)
-        report.append("\n<b>BULK & BLOCK DEALS</b>")
-        
-        from nse_monitor.config import KNOWN_INSTITUTIONS, BULK_REPORT_MIN_VAL_CR, BULK_MAX_ITEMS_REPORT
-        
-        deals_list = bulk_intel.get("deals", [])
-        is_stale = bulk_intel.get("is_stale", True)
-        recap_date = bulk_intel.get("recap_date", "N/A")
-        
-        if not is_stale and deals_list:
-            report.append(f"<i>Recap Session: {recap_date}</i>")
-            # Filter & Sort
-            eligible = [d for d in deals_list if d.get("val_cr", 0) >= BULK_REPORT_MIN_VAL_CR]
-            sorted_bulk = sorted(eligible, key=lambda x: (-x['val_cr'], x['symbol']))[:BULK_MAX_ITEMS_REPORT]
-            
-            if sorted_bulk:
-                for d in sorted_bulk:
-                    # v4.2.1: Hardened matching
-                    clean_name = " ".join(d['client_name'].upper().split())
-                    badge = "[INST] " if any(inst in clean_name for inst in KNOWN_INSTITUTIONS) else ""
-                    bs_icon = "[BUY]" if d['buy_sell'] == "BUY" else "[SELL]"
-                    report.append(f"- {badge}{d['symbol']}: {d['buy_sell']} {d['client_name']} | <b>Rs {d['val_cr']:.1f} Cr</b> {bs_icon}")
-            else:
-                report.append(f"<i>No significant deals (>Rs {BULK_REPORT_MIN_VAL_CR} Cr) detected.</i>")
-        else:
-            # Stale or Empty path
-            expected_session = bulk_intel.get("recap_date", "N/A")
-            report.append(f"<i>Session: {expected_session}</i>")
-            report.append("<i>No fresh deals detected for this session.</i>")
+        # 4. Bulk & Block Deals (v5.2.4: Removed section to focus on filings)
+        # ... (Removed per user request)
 
         report.append("\n------------------------")
         report.append("<i>Strict NSE filings only | Non-SEBI Adv.</i>")
