@@ -171,7 +171,7 @@ class MarketIntelligenceSystem:
             return False
         # v5.1: Live Signals from 8:30 AM to 4:30 PM (Pre-market + Market + Post-market)
         curr_min = now.hour * 60 + now.minute
-        return 510 <= curr_min < 990  # 08:30 to 16:30
+        return 510 <= curr_min < 930  # 08:30 AM to 15:30 PM (Strict Market Session)
 
     async def eod_billing(self):
         now = datetime.now(self.ist)

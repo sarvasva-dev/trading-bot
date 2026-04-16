@@ -78,9 +78,9 @@ class ReportBuilder:
         # 3. High Impact Signals (v4.0 Null-Safe Sort)
         report.append("\n<b>INSTITUTIONAL TRIGGERS</b>")
         
-        # Filter out impact_score=0 as per Rule #3 policy
         trigger_news = [n for n in all_news if int(n.get("impact_score") or 0) > 0]
-        sorted_news = sorted(trigger_news, key=lambda x: int(x.get('impact_score') or 0), reverse=True)[:5]
+        # v5.3: Expanded recap (Full list of qualified overnight news)
+        sorted_news = sorted(trigger_news, key=lambda x: int(x.get('impact_score') or 0), reverse=True)
         
         for idx, item in enumerate(sorted_news, 1):
             url = item.get('url', '#')
