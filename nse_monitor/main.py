@@ -462,14 +462,15 @@ class MarketIntelligenceSystem:
             #         self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
             #         return False
 
-            # v5.3.1: Conditional Media Suppression
+            # v5.4.1: Unified Policy Enforcement (Standardized for Score 8+)
             if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
-                if "ULTRA_STRICT" in ALERT_POLICY_MODE:
-                    logger.info("Media suppression: %s is ingest-only (Ultra-Strict active)", symbol)
+                if score < 8 and "ULTRA_STRICT" in ALERT_POLICY_MODE:
+                    logger.info("Media suppression: %s is ingest-only (Score %s < 8)", symbol, score)
                     self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                     return False
                 else:
-                    logger.info("Media alert allowed: %s (Sensitive Mode active)", symbol)
+                    logger.info("Media alert candidate: %s with Score %s", symbol, score)
+
 
             if market_on and self.daily_alerts_count >= DAILY_ALERT_HARD_CAP:
                 if score < 9:
