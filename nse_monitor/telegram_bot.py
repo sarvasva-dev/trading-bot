@@ -623,7 +623,8 @@ class TelegramBot:
                 await self._send_raw(chat_id, message, disable_web_page_preview=True)
                 
                 # 2. Attach PDF if applicable
-                if pdf_path and os.path.exists(pdf_path):
+                from nse_monitor.config import TELEGRAM_SEND_PDF
+                if TELEGRAM_SEND_PDF and pdf_path and os.path.exists(pdf_path):
                     try:
                         file_size = os.path.getsize(pdf_path) / (1024 * 1024)
                         if file_size < 5:

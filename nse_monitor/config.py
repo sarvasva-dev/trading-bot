@@ -84,6 +84,7 @@ DAILY_ALERT_HARD_CAP = int(os.getenv("DAILY_ALERT_HARD_CAP", 10))
 SYMBOL_COOLDOWN_MIN = int(os.getenv("SYMBOL_COOLDOWN_MIN", 90))
 NEUTRAL_BLOCK = int(os.getenv("NEUTRAL_BLOCK", 1))
 ALLOWED_LIVE_SOURCES = os.getenv("ALLOWED_LIVE_SOURCES", "NSE,NSE_SME,NSE_BULK").split(",")
+TELEGRAM_SEND_PDF = False
 
 # 8. Bulk Intelligence Policy (V4.2.1)
 BULK_REPORT_MIN_VAL_CR = int(os.getenv("BULK_REPORT_MIN_VAL_CR", 5))
