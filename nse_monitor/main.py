@@ -462,10 +462,14 @@ class MarketIntelligenceSystem:
             #         self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
             #         return False
 
+            # v5.3.1: Conditional Media Suppression
             if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
-                logger.info("Media suppression: %s is ingest-only", symbol)
-                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-                return False
+                if "ULTRA_STRICT" in ALERT_POLICY_MODE:
+                    logger.info("Media suppression: %s is ingest-only (Ultra-Strict active)", symbol)
+                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                    return False
+                else:
+                    logger.info("Media alert allowed: %s (Sensitive Mode active)", symbol)
 
             if market_on and self.daily_alerts_count >= DAILY_ALERT_HARD_CAP:
                 if score < 9:
