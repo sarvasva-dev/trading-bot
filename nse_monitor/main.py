@@ -439,6 +439,8 @@ class MarketIntelligenceSystem:
             source_name = item.get("source", "").upper().strip()
             if ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
                 if score < 8 or not analysis.get("valid_event"):
+                    logger.info("Policy block: ULTRA_STRICT_8PLUS rejects %s (Score: %s)", symbol, score)
+                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                     return False
                 allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
                 if source_name not in allowed:
