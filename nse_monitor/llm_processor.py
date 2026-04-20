@@ -142,6 +142,12 @@ RULE 22 — CRORE VALUE INJECTION:
   Always scan the filing text for any numerical amount.
   {amount_hint}
 
+RULE 23 — MOMENTUM & PRICE ACTION SHOCK:
+  If the {momentum_found} or text confirms a "jump > 10%", "Upper Circuit", "52-week High", or "Multi-fold rally":
+  - YOU MUST assign impact_score: 8 or 9 (Crucial for potential news).
+  - This overrides Rule #3 (media skepticism). Real price action is the ultimate confirmation.
+  - sentiment: Bullish (if positive) or Bearish (if negative).
+
 ══════════════════════════════════════════════════════════════
 CONTEXT VARIABLES
 ══════════════════════════════════════════════════════════════
@@ -149,6 +155,7 @@ MARKET STATUS: {market_status}
 SOURCE TYPE:   {source_name}
 {source_bias}
 DETECTED DEAL AMOUNT: {amount_found}
+DETECTED MOMENTUM:    {momentum_found}
 
 FILING/NEWS DATA:
 {context_text}
@@ -223,12 +230,20 @@ class LLMProcessor:
             else "No specific amount detected."
         )
 
+        momentum_found = self._extract_momentum(context_text)
+        momentum_hint = (
+            f"Detected momentum signals: {momentum_found}. Apply Rule #23 (Booster) immediately."
+            if momentum_found
+            else "No specific price action momentum detected."
+        )
+
         prompt = INSTITUTIONAL_PROMPT.format(
             market_status=market_status,
             source_name=source_name,
             source_bias=source_bias,
             amount_found=amount_found or "None detected",
             amount_hint=amount_hint,
+            momentum_found=momentum_hint,
             context_text=context_text
         )
 
@@ -325,6 +340,25 @@ class LLMProcessor:
             text, re.IGNORECASE
         )
         return ", ".join(matches[:5]) if matches else None
+
+    def _extract_momentum(self, text):
+        """v2.1: Deterministic extraction of price-action shocks (% move, circuits)."""
+        if not text: return None
+        signals = []
+        
+        # 1. Percentage jumps (Focus on >10%)
+        percent_matches = re.findall(r'(\d+)\s*%', text)
+        for p in percent_matches:
+            if int(p) >= 10:
+                signals.append(f"{p}% jump")
+        
+        # 2. Key momentum terminology
+        keywords = ["upper circuit", "lower circuit", "52-week high", "52-week low", "multi-year high", "record high", "jumped", "surged"]
+        for kw in keywords:
+            if kw in text.lower():
+                signals.append(kw.title())
+                
+        return ", ".join(signals) if signals else None
 
     def _regex_extract(self, text):
         """Last-ditch regex extraction when JSON is broken."""

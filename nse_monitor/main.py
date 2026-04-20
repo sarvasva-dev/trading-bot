@@ -435,18 +435,24 @@ class MarketIntelligenceSystem:
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
 
-            # v4.3.2: Separate Ingestion (0.1 Cr) from Alerting (5.0 Cr)
+            # v5.3: Institutional Policy Enforcement (Recalibrated for Sensitivity)
             source_name = item.get("source", "").upper().strip()
-            if ALERT_POLICY_MODE == "ULTRA_STRICT_8PLUS":
-                if score < 8 or not analysis.get("valid_event"):
-                    logger.info("Policy block: ULTRA_STRICT_8PLUS rejects %s (Score: %s)", symbol, score)
-                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-                    return False
-                allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
-                if source_name not in allowed:
-                    logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
-                    self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
-                    return False
+            
+            # Determine threshold based on policy
+            min_score = 8
+            if ALERT_POLICY_MODE == "SENSITIVE_7PLUS":
+                min_score = 7
+            
+            if score < min_score or not analysis.get("valid_event"):
+                logger.info("Policy block: %s rejects %s (Score: %s)", ALERT_POLICY_MODE, symbol, score)
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
+
+            allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
+            if source_name not in allowed and "ULTRA_STRICT" in ALERT_POLICY_MODE:
+                logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
+                self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
+                return False
             
             # v5.2.3: Removal of khusus source suppression logic
             # if source_name == "NSE_BULK":
