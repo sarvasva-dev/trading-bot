@@ -279,7 +279,7 @@ class LLMProcessor:
         for attempt in range(3):
             try:
                 logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/3)...")
-                async with self.session.post(url, headers=headers, json=payload, timeout=60) as r:
+                async with self.session.post(url, headers=headers, json=payload, timeout=120) as r:
                     if r.status != 200:
                         logger.error(f"Sarvam API Error: {r.status}")
                         if attempt < 2: await asyncio.sleep(2 ** attempt)

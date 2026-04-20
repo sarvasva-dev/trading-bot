@@ -415,7 +415,7 @@ class MarketIntelligenceSystem:
                     pdf_path = await loop.run_in_executor(None, lambda: self.pdf_processor.download_pdf(item["url"]))
                     text = await loop.run_in_executor(None, lambda: self.pdf_processor.extract_text(pdf_path))
                     if text and len(text) > 100:
-                        item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:3000]}"
+                        item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:2000]}"
                 except Exception:
                     pass
 
