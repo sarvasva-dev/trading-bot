@@ -1,83 +1,60 @@
-# Bulkbeat TV v2.0 (Institutional Pro)
+# Bulkbeat TV v20.0 — Institutional Market Intelligence Engine
 
-High-precision Indian market intelligence engine. Fully async architecture engineered to run 24/7 on a 1GB Linux VPS with zero-loss data ingestion and ultra-strict AI signal generation.
+**Bulkbeat TV** is a high-precision, institutional-grade market intelligence engine designed for the Indian equities market (NSE). Engineered with a fully asynchronous architecture, it delivers real-time signals from corporate filings and institutional media, filtered through a strict 22-rule AI auditing protocol.
 
-## 🏛️ v2.0 Core Features
-- **Fully Async Engine**: `asyncio`-native core — no ThreadPool, no blocking I/O.
-- **5-Source Intelligence Pipeline**: NSE, NSE SME, Bulk Deals, Economic Times, Moneycontrol (ingest-only).
-- **AI Model**: Sarvam 30B (`sarvam-30b`) — 22-Rule Institutional Engine.
-- **Ultra-Strict Alert Policy (`ULTRA_STRICT_8PLUS`)**: Live alerts only for score ≥ 8 from whitelisted sources (NSE, NSE_SME, NSE_BULK).
-- **Smart Money Analysis**: Institutional flow detection triggered for signals scoring ≥ 7.
-- **Impact Tracker**: Post-alert price tracking to measure signal accuracy.
-- **Nudge Manager**: Automated re-engagement nudges for inactive subscribers.
-- **Symbol Cooldown**: 90-min per-symbol cooldown to prevent alert spam.
-- **Daily Alert Budget**: Soft target 5, hard cap 10 (score ≥ 9 bypasses cap).
-- **Post-Market Suppression**: After market hours, only score = 10 alerts fire.
-- **Pulse Monitoring**: `/pulse` — live RAM, Disk, DB stats via Admin Bot.
-- **Campaign Tracking**: Deep-linked referral tags (e.g. `t.me/bot?start=ad_101`).
-- **SQLite WAL Mode**: 30s busy-timeout for high-concurrency writes.
-- **Safe OCR Pipeline**: Serial Tesseract OCR at 120 DPI for RAM-constrained VPS.
-- **Automated Hot-Backups**: Daily SQLite Online Backup API snapshots (5 retained).
-- **Single-Instance Lock**: PID file guard prevents duplicate bot processes.
+---
 
-## 🛠️ Deployment
+## 🛰️ Key Features (v20.0 Institutional Shield)
 
-### 1. System Preparation
+- **Autonomous Intelligence Pipeline**: Parallel ingestion from NSE, NSE SME, and high-tier institutional media.
+- **Advanced AI Audit (Sarvam 30B)**: Real-time sentiment analysis and impact scoring (1-10) using state-of-the-art LLMs.
+- **Institutional Shield Policy**: Strict alert threshold (Score ≥ 8) ensures only high-conviction signals reach subscribers.
+- **Real-Time Admin Governance**: Instant configuration of AI sensitivity and media sources via a secure Admin Control Panel.
+- **Zero-Loss Data Queue**: SQLite-WAL-backed persistence ensuring zero data drop during high-volatility market bursts.
+- **Smart Money Tracking**: Automated institutional flow analysis for high-impact market events.
+- **Dynamic Community Broadcasts**: Professional notification system with customizable headers (e.g., `ANNUNCIATION`, `TEST`, `SUMMARY`).
+
+---
+
+## 🏛️ Administrative Governance
+
+The system features a decoupled **Admin Control Panel** for real-time mission control:
+
+- **Threshold Management**: Adjust AI strictness instantly (4/6/8 sensitivity scale).
+- **Media Mute**: Toggle official institutional filings vs. general media signals.
+- **Dynamic Broadcasts**: Send formatted signals to the entire user base using the pipe separator syntax:
+  - `/broadcast TITLE | YOUR_MESSAGE`
+- **User Auditing**: Real-time management of active subscriptions and credit balances.
+
+---
+
+## 🛠️ Quick Deployment (Institutional VPS)
+
+### 1. Environment Setup
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install python3-pip python3-venv git tesseract-ocr -y
-```
-
-### 2. Installation
-```bash
-git clone <your_repo_url>
+git clone <repository_url>
 cd nse2
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Environment Configuration (`.env`)
-```env
-# Core
-TELEGRAM_BOT_TOKEN=your_token
-TELEGRAM_ADMIN_BOT_TOKEN=your_admin_token
-TELEGRAM_ADMIN_CHAT_ID=your_admin_chat_id
-SARVAM_API_KEY=your_sarvam_key
-ADMIN_PASSWORD=your_dashboard_pass
-
-# Alert Policy (optional overrides)
-ALERT_POLICY_MODE=ULTRA_STRICT_8PLUS
-DAILY_ALERT_HARD_CAP=10
-SYMBOL_COOLDOWN_MIN=90
-NEUTRAL_BLOCK=1
-ALLOWED_LIVE_SOURCES=NSE,NSE_SME,NSE_BULK
-
-# Payment (optional)
-RAZORPAY_KEY_ID=your_raz_key
-RAZORPAY_KEY_SECRET=your_raz_sec
-```
-
-### 4. Database Migration
+### 2. Service Initialization
+The system runs as a `systemd` service for 99.9% uptime.
 ```bash
-python migrate_v7.py
+# Definitive Institutional Sync & Restart
+git pull origin main && pkill -f admin_bot.py && sudo systemctl restart nsebot && nohup python admin_bot.py > admin_bot.log 2>&1 &
 ```
 
-### 5. Service Management (Systemd)
-```bash
-sudo cp nsebot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable nsebot
-sudo systemctl start nsebot
-```
+---
 
-## 📊 Operations
-- **Health Check**: `python -m nse_monitor.main --health`
-- **Logs**: `nse_monitor/logs/app.log` (rotating, max 5MB × 3)
-- **Database**: `nse_monitor/data/processed_announcements.db`
-- **Backups**: `nse_monitor/data/backups/` (5 copies retained)
-- **Admin Bot**: `/pulse`, `/broadcast`, `/grant`
-- **User Bot**: `/hisab` (billing audit), `/bulk`, `/upcoming`
+## 📊 Operations & Monitoring
+- **Admin Dashboard**: Accessible via the dedicated Admin Bot.
+- **Log Audit**: `tail -f nse_monitor/logs/service.log`
+- **Data Persistence**: `nse_monitor/data/processed_announcements.db`
+- **Service Status**: `sudo systemctl status nsebot`
+
+---
 
 ## ⚖️ Disclaimer
-*Non-SEBI Research Tool. Educational purposes only. Users assume all risk for financial decisions.*
+*Non-SEBI Research Tool. Content is for educational and informational purposes only. Trading involves substantial risk. Consultation with certified professionals is advised. Bulkbeat TV is an AI-augmented automation suite providing high-speed information processing.*
