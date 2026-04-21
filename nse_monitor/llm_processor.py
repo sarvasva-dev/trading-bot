@@ -237,6 +237,10 @@ class LLMProcessor:
             else "No specific price action momentum detected."
         )
 
+        # Inject Symbol into Context for better Rule #4 and Rule #20 application
+        symbol = lead_news.get('symbol', 'UNKNOWN')
+        context_text = f"TICKER/SYMBOL: {symbol}\n{context_text}"
+
         prompt = INSTITUTIONAL_PROMPT.format(
             market_status=market_status,
             source_name=source_name,

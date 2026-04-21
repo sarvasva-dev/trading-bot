@@ -427,11 +427,12 @@ class MarketIntelligenceSystem:
                 return None
 
             score = int(analysis.get("impact_score", 0))
-            symbol = str(analysis.get("symbol", "N/A")).upper()
+            # Fallback to item symbol if LLM fails
+            symbol = str(analysis.get("symbol", item.get("symbol", "N/A"))).upper()
             sentiment = analysis.get("sentiment", "Neutral")
 
             if NEUTRAL_BLOCK and sentiment == "Neutral":
-                logger.info("Policy block: neutral sentiment for %s", symbol)
+                logger.info("[BLOCKED: NEUTRAL] %s | Score: %s | Headline: %s", symbol, score, item.get('headline')[:50])
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
 
@@ -444,7 +445,7 @@ class MarketIntelligenceSystem:
                 min_score = 7
             
             if score < min_score or not analysis.get("valid_event"):
-                logger.info("Policy block: %s rejects %s (Score: %s)", ALERT_POLICY_MODE, symbol, score)
+                logger.info("[BLOCKED: SCORE] %s | Score: %s | Policy: %s", symbol, score, ALERT_POLICY_MODE)
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
 
