@@ -22,7 +22,7 @@ def run_diagnostic():
     print(f"Total Pending Items: {pending}")
 
     # 2. Check for Analyzed but Blocked News Today
-    print("\n--- Last 10 Analyzed Items Today ---")
+    print("\n--- Last 15 Items Today (Full Pipeline) ---")
     cursor.execute("""
         SELECT symbol, impact_score, sentiment, processing_status, headline 
         FROM news_items 
@@ -35,13 +35,27 @@ def run_diagnostic():
         print("No items analyzed today yet.")
     for row in rows:
         sym, score, sent, status, head = row
-        alert_str = "SUCCESS" if status == 2 else "BLOCKED"
-        print(f"[{alert_str}] {sym} | Score: {score} | Sent: {sent} | {head[:60]}...")
+        
+        # v5.8: Precise Status Mapping
+        status_map = {
+            0: "PENDING",
+            1: "ANALYZED ",
+            2: "ALERTED ",
+            3: "QUEUED (MORNING)"
+        }
+        status_str = status_map.get(status, f"STAT_{status}")
+        score_val = score if score is not None else "--"
+        
+        print(f"[{status_str}] {sym or 'N/A':10} | Score: {score_val:2} | {head[:60]}...")
 
-    # 3. Check for Successful Alerts Today
+    # 3. Queue Health
+    cursor.execute("SELECT COUNT(*) FROM news_items WHERE processing_status = 3")
+    queued = cursor.fetchone()[0]
+    print(f"\nItems Queued for Tomorrow (8:30 AM): {queued}")
+
     cursor.execute("SELECT COUNT(*) FROM alert_dispatch_log WHERE date(dispatch_time) = date('now', 'localtime')")
     alerts = cursor.fetchone()[0]
-    print(f"\nTotal Dispatched Today: {alerts}")
+    print(f"Total Dispatched Today: {alerts}")
 
     conn.close()
 
