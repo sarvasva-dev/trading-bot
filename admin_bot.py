@@ -526,12 +526,13 @@ class AdminPanel:
     async def _handle_broadcast(self, chat_id, text):
         full_content = text.replace("/broadcast", "").strip()
         if not full_content:
-            await self._send(chat_id, "Usage: <code>/broadcast TITLE | MESSAGE</code> or just <code>/broadcast MESSAGE</code>")
+            await self._send(chat_id, "Usage: <code>/broadcast TITLE | MESSAGE</code>")
             return
         
-        # v7.5: Dynamic Header Parsing (Title | Msg)
+        # v7.8: Robust Header Injection
         if " | " in full_content:
             parts = full_content.split(" | ", 1)
+            # This part REPLACES 'SIGNAL UPDATE'
             header_title = parts[0].strip().upper()
             msg_body = parts[1].strip()
         else:
@@ -539,18 +540,21 @@ class AdminPanel:
             msg_body = full_content
             
         if len(msg_body) > 1000:
-            await self._send(chat_id, "❌ <b>Error:</b> Broadcast too long (Max 1000 chars).")
+            await self._send(chat_id, "❌ <b>Error:</b> Broadcast too long.")
             return
         
         active_users = self.db.get_active_users()
         count = 0
+        formatted_header = f"<b>{BOT_NAME} | {header_title}</b>"
+        final_msg = f"{formatted_header}\n------------------------------\n{msg_body}"
+        
         for uid in active_users:
             try:
-                await self._send(uid, f"<b>{BOT_NAME} | {header_title}</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
+                await self._send(uid, final_msg, use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
             except: pass
-        await self._send(chat_id, f"Broadcast sent to {count} users with header: {header_title}")
+        await self._send(chat_id, f"✅ <b>Success:</b> Broadcast sent to {count} users.\n<b>Header Used:</b> {header_title}")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False, edit_message_id=None):
         payload = {"chat_id": chat_id, "text": self._repair_mojibake_text(text), "parse_mode": "HTML"}
