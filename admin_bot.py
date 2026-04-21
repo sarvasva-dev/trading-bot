@@ -219,13 +219,15 @@ class AdminPanel:
             val = data.split("_")[2]
             self.db.set_config("ai_threshold", val)
             await self._answer_callback(cb["id"], f"OK. AI Threshold set to {val}")
-            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"])
+            # v6.7: Immediate State Override (Prevent DB-Lag Ghosting)
+            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"], override_threshold=val)
         elif data == "toggle_media_mute":
             current = self.db.get_config("media_mute", "0")
             new_val = "1" if current == "0" else "0"
             self.db.set_config("media_mute", new_val)
             await self._answer_callback(cb["id"], f"OK. Media Mute: {'ON' if new_val == '1' else 'OFF'}")
-            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"])
+            # v6.7: Immediate State Override
+            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"], override_mute=new_val)
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
             offset = page * 10
@@ -305,17 +307,20 @@ class AdminPanel:
         }
         await self._send(chat_id, text, keyboard)
 
-    async def _show_config_menu(self, chat_id, edit_message_id=None):
-        thresh = self.db.get_config("ai_threshold", "8")
-        mute = self.db.get_config("media_mute", "0")
+    async def _show_config_menu(self, chat_id, edit_message_id=None, override_threshold=None, override_mute=None):
+        # v6.7: State Synthesis (Priority: Override > DB > Default)
+        thresh = override_threshold or self.db.get_config("ai_threshold", "8")
+        mute = override_mute or self.db.get_config("media_mute", "0")
+        
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
         ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
+        sync_icon = "✅" if (override_threshold or override_mute) else "📡"
         
         text = (
-            f"<b>{BOT_NAME} | LIVE CONFIG (v6.6)</b>\n"
+            f"<b>{BOT_NAME} | LIVE CONFIG (v6.7)</b>\n"
             f"------------------------------\n"
-            f"<b>Current Threshold:</b> {thresh}/10\n"
-            f"<b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"<b>Current Threshold:</b> {thresh}/10 {sync_icon}\n"
+            f"<b>Media Source:</b> {'MUTED (Official Online)' if mute == '1' else 'ACTIVE'}\n"
             f"<b>Last Updated:</b> <code>{ist_now} (IST)</code>\n"
             f"------------------------------\n"
             f"<i>Settings apply instantly to the next engine cycle.</i>"
