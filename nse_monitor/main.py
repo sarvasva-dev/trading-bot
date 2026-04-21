@@ -70,7 +70,7 @@ _log_handler.setFormatter(_formatter)
 _console_handler = SafeConsoleStreamHandler(sys.stdout)
 _console_handler.setFormatter(_formatter)
 logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _log_handler])
-logger = logging.getLogger("NSEPulse")
+logger = logging.getLogger("BulkbeatTV")
 
 
 def _pid_file_path():
@@ -112,7 +112,7 @@ def check_single_instance():
 class MarketIntelligenceSystem:
     def __init__(self):
         logger.info("=" * 48)
-        logger.info("%s v2.0 - ASYNC OS BOOT", BOT_NAME)
+        logger.info("  %s v3.0 - ASYNC OS BOOT", BOT_NAME)
         logger.info("=" * 48)
 
         self.ist = pytz.timezone("Asia/Kolkata")
@@ -145,7 +145,7 @@ class MarketIntelligenceSystem:
             NseSmeSource(client=self.nse_client),
             EconomicTimesSource(),
             MoneycontrolSource(),
-            # BulkDealSource(nse_client=self.nse_client), # v5.2.3: Permanent disable per user request
+            # BulkDealSource(nse_client=self.nse_client), # Permanently disabled per institutional audit
         ]
 
         self.alert_memory = {}
@@ -154,8 +154,8 @@ class MarketIntelligenceSystem:
         self.health_session = None # v5.2: Pooled session for diagnostic checks
         self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
         logger.info("================================================")
-        logger.info("  Bulkbeat TV — Follow the Beat of Big Money")
-        logger.info("  Smart Money Intelligence Engine v2.0 ONLINE")
+        logger.info("  Bulkbeat TV — The Pulse of Institutional Money")
+        logger.info("  Market Intelligence Engine v3.0 ONLINE")
         logger.info("================================================")
 
     async def start_background_tasks(self):
