@@ -218,14 +218,14 @@ class AdminPanel:
         elif data.startswith("set_threshold_"):
             val = data.split("_")[2]
             self.db.set_config("ai_threshold", val)
-            await self._answer_callback(cb["id"], f"OK. AI Threshold set to {val}", show_alert=True)
-            await self._show_config_menu(chat_id)
+            await self._answer_callback(cb["id"], f"OK. AI Threshold set to {val}")
+            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"])
         elif data == "toggle_media_mute":
             current = self.db.get_config("media_mute", "0")
             new_val = "1" if current == "0" else "0"
             self.db.set_config("media_mute", new_val)
-            await self._answer_callback(cb["id"], f"OK. Media Mute: {'ON' if new_val == '1' else 'OFF'}", show_alert=True)
-            await self._show_config_menu(chat_id)
+            await self._answer_callback(cb["id"], f"OK. Media Mute: {'ON' if new_val == '1' else 'OFF'}")
+            await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"])
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
             offset = page * 10
@@ -305,13 +305,13 @@ class AdminPanel:
         }
         await self._send(chat_id, text, keyboard)
 
-    async def _show_config_menu(self, chat_id):
+    async def _show_config_menu(self, chat_id, edit_message_id=None):
         thresh = self.db.get_config("ai_threshold", "8")
         mute = self.db.get_config("media_mute", "0")
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
         
         text = (
-            f"<b>BOT LIVE CONFIG</b>\n"
+            f"<b>{BOT_NAME} | LIVE CONFIG</b>\n"
             f"------------------------------\n"
             f"<b>Current Threshold:</b> {thresh}/10\n"
             f"<b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
@@ -323,11 +323,11 @@ class AdminPanel:
                 [{"text": "Threshold: 4 (Aggressive)", "callback_data": "set_threshold_4"}],
                 [{"text": "Threshold: 6 (Balanced)", "callback_data": "set_threshold_6"}],
                 [{"text": "Threshold: 8 (Ultra Strict)", "callback_data": "set_threshold_8"}],
-                [{"text": "Toggle Media Mute", "callback_data": "toggle_media_mute"}],
+                [{"text": mute_label, "callback_data": "toggle_media_mute"}],
                 [{"text": "Back to Main Menu", "callback_data": "menu_main"}]
             ]
         }
-        await self._send(chat_id, text, keyboard)
+        await self._send(chat_id, text, keyboard, edit_message_id=edit_message_id)
 
     async def _handle_global_hisab(self, chat_id):
         debits, users = self.db.get_global_hisab(days=1)
@@ -536,10 +536,16 @@ class AdminPanel:
             except: pass
         await self._send(chat_id, f"Broadcast sent to {count} users.")
 
-    async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False):
+    async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False, edit_message_id=None):
         payload = {"chat_id": chat_id, "text": self._repair_mojibake_text(text), "parse_mode": "HTML"}
         if keyboard: payload["reply_markup"] = keyboard
-        url = self.broadcast_url if use_signal_bot else f"{self.base_url}/sendMessage"
+        
+        if edit_message_id:
+            payload["message_id"] = edit_message_id
+            url = f"{self.base_url}/editMessageText"
+        else:
+            url = self.broadcast_url if use_signal_bot else f"{self.base_url}/sendMessage"
+            
         try:
             async with self.session.post(url, json=payload, timeout=10) as resp:
                 await resp.text()
