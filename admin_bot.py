@@ -286,7 +286,7 @@ class AdminPanel:
 
     async def _send_main_menu(self, chat_id):
         text = (
-            f"<b>{BOT_NAME} ADMIN GUIDE (v12.0 - ASYNC)</b>\n"
+            f"<b>{BOT_NAME} INTELLIGENCE GATEWAY (v12.0)</b>\n"
             f"------------------------------\n"
             f"<b>Commands:</b>\n"
             f"- <code>/users</code> : Active User Summary\n"
@@ -299,8 +299,8 @@ class AdminPanel:
         keyboard = {
             "inline_keyboard": [
                 [{"text": "System Status", "callback_data": "menu_status"}, {"text": "Bot Config", "callback_data": "menu_config"}],
-                [{"text": "User Audit", "callback_data": "menu_list"}, {"text": "Global Hisab", "callback_data": "menu_hisab"}],
-                [{"text": "Broadcast", "callback_data": "menu_broadcast"}, {"text": "DB Rescue", "callback_data": "menu_rescue"}]
+                [{"text": "User Audit", "callback_data": "menu_list"}, {"text": "Global Audit", "callback_data": "menu_hisab"}],
+                [{"text": "Send Signal", "callback_data": "menu_broadcast"}, {"text": "DB Rescue", "callback_data": "menu_rescue"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
@@ -530,7 +530,7 @@ class AdminPanel:
         count = 0
         for uid in active_users:
             try:
-                await self._send(uid, f"<b>ADMIN ANNOUNCEMENT</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
+                await self._send(uid, f"<b>{BOT_NAME} | SIGNAL UPDATE</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
             except: pass
