@@ -537,13 +537,14 @@ class MarketIntelligenceSystem:
                 return False
 
             # MARKET ON: LIVE SIGNAL
-            send_result = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
-            if inspect.isawaitable(send_result):
-                await send_result
+            # v5.5: Non-blocking background dispatch to prevent analysis bottlenecks
+            dispatch_coro = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
+            asyncio.create_task(dispatch_coro)
+            
             self.db.mark_alert_sent(news_id)
             self.daily_alerts_count += 1
             self.cooldowns[symbol] = now_ts
-            logger.info("Dispatched LIVE #%s: %s (%s/10)", self.daily_alerts_count, symbol, score)
+            logger.info("Intelligence Hand-off: #%s %s queued for dispatch (%s/10)", self.daily_alerts_count, symbol, score)
 
             if market_on:
                 asyncio.create_task(self.impact_tracker.start_tracking(news_id, symbol, score, sentiment))
@@ -555,9 +556,12 @@ class MarketIntelligenceSystem:
                 alerted=True,
             )
             return analysis
+        except Exception as e:
+            logger.error("Critical failure in _process_single_item for %s: %s", item.get('symbol', 'N/A'), e)
+            return None
         finally:
-            # v5.2.2: Managed Deletion ONLY after all processing (including dispatch) is finished
-            if pdf_path and os.path.exists(pdf_path):
+            # v5.5: Handled by background task or manual cycle cleanup in main loop
+            pass
                 try:
                     os.remove(pdf_path)
                     logger.debug(f"Managed cleanup: Deleted {pdf_path}")
