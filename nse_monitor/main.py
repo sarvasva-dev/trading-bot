@@ -394,19 +394,36 @@ class MarketIntelligenceSystem:
         await self.nudge_manager.run_audit()
         logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
-        pending = self.db.get_pending_news(limit=15)
-        if not pending:
-            return False
-
+        # v5.4: Queue Draining Architecture (Zero-Lag)
+        # Instead of processing 4 items and sleeping 3 mins, we keep processing
+        # until the database queue is empty.
+        processed_this_cycle = 0
         market_on = self.is_market_hours()
-        analysis_tasks = [self._process_single_item(item, market_on) for item in pending]
-        results = await asyncio.gather(*analysis_tasks)
+        
+        while True:
+            pending = self.db.get_pending_news(limit=5) # Balanced batch for VPS RAM
+            if not pending:
+                if processed_this_cycle > 0:
+                    logger.info("Queue Drain: all %s pending items cleared.", processed_this_cycle)
+                break
 
-        analyzed_count = len([r for r in results if r is not None])
-        logger.info("Intelligence: analyzed=%s", analyzed_count)
-        result = any(results)
+            analysis_tasks = [self._process_single_item(item, market_on) for item in pending]
+            results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+            
+            # Handle results and errors
+            valid_results = [r for r in results if r is not None and not isinstance(r, Exception)]
+            processed_this_cycle += len(pending)
+            
+            # Log progress if backlog is large
+            if processed_this_cycle % 20 == 0:
+                logger.info("Queue Drain: processed %s items so far...", processed_this_cycle)
+            
+            # Small breath for event loop & API rate stability
+            await asyncio.sleep(0.5)
+
+        logger.info("Intelligence: analyzed=%s", processed_this_cycle)
         gc.collect() # v5.2: Force RAM recovery after heavy processing
-        return result
+        return processed_this_cycle > 0
 
     async def _process_single_item(self, item, market_on):
         news_id = item["db_id"]
