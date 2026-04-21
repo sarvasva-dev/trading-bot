@@ -143,9 +143,9 @@ class MarketIntelligenceSystem:
         self.sources = [
             NSESource(client=self.nse_client),
             NseSmeSource(client=self.nse_client),
-            # EconomicTimesSource(),
-            # MoneycontrolSource(),
-            # BulkDealSource(nse_client=self.nse_client), # v5.2.3: Disabled per user request
+            EconomicTimesSource(),
+            MoneycontrolSource(),
+            # BulkDealSource(nse_client=self.nse_client), # v5.2.3: Permanent disable per user request
         ]
 
         self.alert_memory = {}
@@ -358,7 +358,14 @@ class MarketIntelligenceSystem:
             self.cooldowns = {}
             logger.info("Daily budget and cooldown state reset.")
 
-        tasks = [source.fetch() for source in self.sources]
+        # v5.8: Sync Media Sources with Admin Toggle (0=Active, 1=Muted)
+        media_mute = self.db.get_config("media_mute", "0")
+        active_sources = [
+            s for s in self.sources 
+            if not isinstance(s, (EconomicTimesSource, MoneycontrolSource)) or media_mute == "0"
+        ]
+
+        tasks = [source.fetch() for source in active_sources]
         source_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         raw_items = []
