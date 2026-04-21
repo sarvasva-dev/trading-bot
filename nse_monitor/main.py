@@ -358,8 +358,12 @@ class MarketIntelligenceSystem:
             self.cooldowns = {}
             logger.info("Daily budget and cooldown state reset.")
 
-        # v5.8: Sync Media Sources with Admin Toggle (0=Active, 1=Muted)
+        # v6.4: Real-time Status Audit (Proof of Logic)
         media_mute = self.db.get_config("media_mute", "0")
+        current_thresh = self.db.get_config("ai_threshold", "8")
+        media_status = "MUTED (Official Only)" if media_mute == "1" else "ACTIVE"
+        logger.info(">>> Intelligence Cycle Started | Threshold=%s | Media=%s", current_thresh, media_status)
+
         active_sources = [
             s for s in self.sources 
             if not isinstance(s, (EconomicTimesSource, MoneycontrolSource)) or media_mute == "0"
