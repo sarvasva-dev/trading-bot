@@ -306,7 +306,7 @@ class AdminPanel:
         await self._send(chat_id, text, keyboard)
 
     async def _show_config_menu(self, chat_id):
-        thresh = self.db.get_config("ai_threshold", "5")
+        thresh = self.db.get_config("ai_threshold", "8")
         mute = self.db.get_config("media_mute", "0")
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
         
@@ -320,9 +320,9 @@ class AdminPanel:
         )
         keyboard = {
             "inline_keyboard": [
-                [{"text": "Threshold: 3 (Aggressive)", "callback_data": "set_threshold_3"}],
-                [{"text": "Threshold: 5 (Standard)", "callback_data": "set_threshold_5"}],
-                [{"text": "Threshold: 7 (Safe)", "callback_data": "set_threshold_7"}],
+                [{"text": "Threshold: 4 (Aggressive)", "callback_data": "set_threshold_4"}],
+                [{"text": "Threshold: 6 (Balanced)", "callback_data": "set_threshold_6"}],
+                [{"text": "Threshold: 8 (Ultra Strict)", "callback_data": "set_threshold_8"}],
                 [{"text": "Toggle Media Mute", "callback_data": "toggle_media_mute"}],
                 [{"text": "Back to Main Menu", "callback_data": "menu_main"}]
             ]
