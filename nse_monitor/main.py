@@ -461,13 +461,16 @@ class MarketIntelligenceSystem:
             # v5.3: Institutional Policy Enforcement (Recalibrated for Sensitivity)
             source_name = item.get("source", "").upper().strip()
             
-            # Determine threshold based on policy
-            min_score = 8
-            if ALERT_POLICY_MODE == "SENSITIVE_7PLUS":
+            # v5.7: Dynamic Threshold Control from Admin Panel
+            db_threshold = self.db.get_config("ai_threshold")
+            min_score = int(db_threshold) if db_threshold else 8
+            
+            # v5.3: Institutional Policy Enforcement (Safety Floor)
+            if ALERT_POLICY_MODE == "SENSITIVE_7PLUS" and min_score > 7:
                 min_score = 7
             
-            if score < min_score or not analysis.get("valid_event"):
-                logger.info("[BLOCKED: SCORE] %s | Score: %s | Policy: %s", symbol, score, ALERT_POLICY_MODE)
+            if score < min_score:
+                logger.info("Filtered: #%s %s score %s below threshold %s", news_id, symbol, score, min_score)
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
 
