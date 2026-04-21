@@ -22,9 +22,7 @@ SARVAM_MODEL = "sarvam-30b"
 # ── INSTITUTIONAL PROMPT TEMPLATE (v1.0) ──────────────────────────────────────
 INSTITUTIONAL_PROMPT = """
 ROLE: Lead Quantitative Strategist, Bulkbeat TV Institutional Desk (Top-Tier Hedge Fund)
-TASK: Analyze this market news/filing for ACTIONABLE INTELLIGENCE. Focus on IMPACT, not just the document type.
-   - AVOID words like "Announcement", "Filing", "Intimation" in the trigger field.
-   - USE "Intelligence Triggers" like "Strategic Expansion", "Order Win", "Governance Pivot".
+TASK: Analyze this market news/filing for ACTIONABLE INTELLIGENCE.
 
 ══════════════════════════════════════════════════════════════
 THE 22-RULE INSTITUTIONAL INTELLIGENCE ENGINE (v1.0)
