@@ -292,7 +292,7 @@ class AdminPanel:
             f"- <code>/users</code> : Active User Summary\n"
             f"- <code>/find &lt;id/name&gt;</code> : Search DB\n"
             f"- <code>/grant &lt;id&gt; &lt;days&gt;</code> : Manual Credit\n"
-            f"- <code>/broadcast &lt;msg&gt;</code> : Global Alert\n"
+            f"- <code>/broadcast &lt;msg&gt;</code> : Global Signal\n"
             f"- <code>/status</code> : System Health\n\n"
             f"Select an action below:"
         )

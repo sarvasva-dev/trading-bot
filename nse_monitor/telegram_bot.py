@@ -316,8 +316,6 @@ class TelegramBot:
                 f"────────────────────────\n"
                 f"🛠️ <b>Quick Shortcuts:</b>\n"
                 f"• /plan - See detailed balance\n"
-                f"• /bulk - Today's big deals\n"
-                f"• /upcoming - NSE Corporate Calendar\n"
                 f"• /support - WhatsApp Admin"
                 f"{disclaimer}"
             )
