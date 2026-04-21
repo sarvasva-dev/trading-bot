@@ -208,7 +208,7 @@ class AdminPanel:
         elif data == "menu_list" or data == "menu_users":
             await self._handle_list(chat_id, 0)
         elif data == "menu_broadcast":
-            await self._send(chat_id, "Usage: <code>/broadcast &lt;message&gt;</code>\nThis will notify ALL active subscribers.")
+            await self._send(chat_id, "Usage: <code>/broadcast TITLE | MESSAGE</code>\nThis will notify ALL active subscribers.")
         elif data == "menu_config":
             await self._show_config_menu(chat_id)
         elif data == "menu_hisab":
@@ -524,24 +524,33 @@ class AdminPanel:
         except: pass
 
     async def _handle_broadcast(self, chat_id, text):
-        msg_body = text.replace("/broadcast", "").strip()
-        if not msg_body:
-            await self._send(chat_id, "Empty broadcast.")
+        full_content = text.replace("/broadcast", "").strip()
+        if not full_content:
+            await self._send(chat_id, "Usage: <code>/broadcast TITLE | MESSAGE</code> or just <code>/broadcast MESSAGE</code>")
             return
         
+        # v7.5: Dynamic Header Parsing (Title | Msg)
+        if " | " in full_content:
+            parts = full_content.split(" | ", 1)
+            header_title = parts[0].strip().upper()
+            msg_body = parts[1].strip()
+        else:
+            header_title = "SIGNAL UPDATE"
+            msg_body = full_content
+            
         if len(msg_body) > 1000:
             await self._send(chat_id, "❌ <b>Error:</b> Broadcast too long (Max 1000 chars).")
             return
-
+        
         active_users = self.db.get_active_users()
         count = 0
         for uid in active_users:
             try:
-                await self._send(uid, f"<b>{BOT_NAME} | SIGNAL UPDATE</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
+                await self._send(uid, f"<b>{BOT_NAME} | {header_title}</b>\n------------------------------\n{msg_body}", use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
             except: pass
-        await self._send(chat_id, f"Broadcast sent to {count} users.")
+        await self._send(chat_id, f"Broadcast sent to {count} users with header: {header_title}")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False, edit_message_id=None):
         payload = {"chat_id": chat_id, "text": self._repair_mojibake_text(text), "parse_mode": "HTML"}
@@ -617,4 +626,3 @@ if __name__ == "__main__":
         asyncio.run(AdminPanel().run())
     except KeyboardInterrupt:
         pass
-
