@@ -537,9 +537,16 @@ class MarketIntelligenceSystem:
                 return False
 
             # MARKET ON: LIVE SIGNAL
-            # v5.5: Non-blocking background dispatch to prevent analysis bottlenecks
+            # v5.6: Background dispatch with automatic disk cleanup
             dispatch_coro = self.bot.send_signal(item, analysis, pdf_path=pdf_path)
-            asyncio.create_task(dispatch_coro)
+            task = asyncio.create_task(dispatch_coro)
+            
+            # Ensure PDF is deleted ONLY after the task finishes
+            def _cleanup_pdf(_t):
+                if pdf_path and os.path.exists(pdf_path):
+                    try: os.remove(pdf_path)
+                    except: pass
+            task.add_done_callback(_cleanup_pdf)
             
             self.db.mark_alert_sent(news_id)
             self.daily_alerts_count += 1
