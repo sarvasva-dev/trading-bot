@@ -308,16 +308,16 @@ class AdminPanel:
         await self._send(chat_id, text, keyboard)
 
     async def _show_config_menu(self, chat_id, edit_message_id=None, override_threshold=None, override_mute=None):
-        # v6.7: State Synthesis (Priority: Override > DB > Default)
+        # v7.1: State Synthesis (Priority: Override > DB > Default)
         thresh = override_threshold or self.db.get_config("ai_threshold", "8")
         mute = override_mute or self.db.get_config("media_mute", "0")
         
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
         ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
-        sync_icon = "✅" if (override_threshold or override_mute) else "📡"
+        sync_icon = "🛡️" if thresh == "8" else ("✅" if (override_threshold or override_mute) else "📡")
         
         text = (
-            f"<b>{BOT_NAME} | LIVE CONFIG (v6.7)</b>\n"
+            f"<b>{BOT_NAME} | LIVE CONFIG (v7.0)</b>\n"
             f"------------------------------\n"
             f"<b>Current Threshold:</b> {thresh}/10 {sync_icon}\n"
             f"<b>Media Source:</b> {'MUTED (Official Online)' if mute == '1' else 'ACTIVE'}\n"

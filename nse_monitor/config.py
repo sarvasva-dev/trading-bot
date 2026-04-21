@@ -73,8 +73,8 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-# 7. Alert & Policy Controls (V4.0 Ultra-Strict Mode)
-ALERT_THRESHOLD = 5
+# 7. Alert & Policy Controls (V4.2: Ultra-Strict Institutional Mode)
+ALERT_THRESHOLD = 8
 MAX_ALERTS_PER_HOUR = 5
 DISABLE_SCHEDULER = False
 

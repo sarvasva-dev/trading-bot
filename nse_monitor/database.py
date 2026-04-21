@@ -231,8 +231,8 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_time ON alert_dispatch_log(dispatch_time)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_symbol ON alert_dispatch_log(symbol)")
 
-            # Initial Config Seeds
-            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '5')")
+            # Initial Config Seeds (v6.8: Institutional Policy 8/10)
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '8')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('media_mute', '0')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_backup', '0')")
             
@@ -267,6 +267,11 @@ class Database:
 
     def _migrate_schema(self):
         """v2.0: Centralized migration logic to ensure schema consistency across versions."""
+        # v6.9: Mandatory Threshold Sanitation (Institutional Policy)
+        # Forcefully upgrade legacy '5' to '8' to prevent stale overrides.
+        with self.conn:
+            self.conn.execute("UPDATE system_config SET value = '8' WHERE key = 'ai_threshold' AND value = '5'")
+
         cursor = self.conn.cursor()
         
         # Table: news_items
