@@ -309,14 +309,16 @@ class AdminPanel:
         thresh = self.db.get_config("ai_threshold", "8")
         mute = self.db.get_config("media_mute", "0")
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
+        ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
         
         text = (
-            f"<b>{BOT_NAME} | LIVE CONFIG</b>\n"
+            f"<b>{BOT_NAME} | LIVE CONFIG (v6.6)</b>\n"
             f"------------------------------\n"
             f"<b>Current Threshold:</b> {thresh}/10\n"
             f"<b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"<b>Last Updated:</b> <code>{ist_now} (IST)</code>\n"
             f"------------------------------\n"
-            f"<i>Changes apply instantly to the next cycle.</i>"
+            f"<i>Settings apply instantly to the next engine cycle.</i>"
         )
         keyboard = {
             "inline_keyboard": [
