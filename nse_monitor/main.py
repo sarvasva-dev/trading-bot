@@ -567,13 +567,8 @@ class MarketIntelligenceSystem:
             logger.error("Critical failure in _process_single_item for %s: %s", item.get('symbol', 'N/A'), e)
             return None
         finally:
-            # v5.5: Handled by background task or manual cycle cleanup in main loop
+            # v5.6: Handled by background task or manual cycle cleanup in main loop
             pass
-                try:
-                    os.remove(pdf_path)
-                    logger.debug(f"Managed cleanup: Deleted {pdf_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete temp PDF: {e}")
 
         # return analysis (v5.2.3: Removed redundant return)
 

@@ -24,7 +24,7 @@ def run_diagnostic():
     # 2. Check for Analyzed but Blocked News Today
     print("\n--- Last 10 Analyzed Items Today ---")
     cursor.execute("""
-        SELECT symbol, impact_score, sentiment, alerted, headline 
+        SELECT symbol, impact_score, sentiment, processing_status, headline 
         FROM news_items 
         WHERE date(created_at) = date('now', 'localtime')
         ORDER BY created_at DESC 
@@ -34,8 +34,8 @@ def run_diagnostic():
     if not rows:
         print("No items analyzed today yet.")
     for row in rows:
-        sym, score, sent, alerted, head = row
-        alert_str = "SUCCESS" if alerted else "BLOCKED"
+        sym, score, sent, status, head = row
+        alert_str = "SUCCESS" if status == 2 else "BLOCKED"
         print(f"[{alert_str}] {sym} | Score: {score} | Sent: {sent} | {head[:60]}...")
 
     # 3. Check for Successful Alerts Today
