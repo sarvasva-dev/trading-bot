@@ -21,8 +21,10 @@ SARVAM_MODEL = "sarvam-30b"
 
 # ── INSTITUTIONAL PROMPT TEMPLATE (v1.0) ──────────────────────────────────────
 INSTITUTIONAL_PROMPT = """
-ROLE: Lead Quantitative Strategist, NSE Institutional Desk (Top-Tier Hedge Fund)
-TASK: Analyze this market news/filing with MAXIMUM PRECISION for immediate institutional impact.
+ROLE: Lead Quantitative Strategist, Bulkbeat TV Institutional Desk (Top-Tier Hedge Fund)
+TASK: Analyze this market news/filing for ACTIONABLE INTELLIGENCE. Focus on IMPACT, not just the document type.
+   - AVOID words like "Announcement", "Filing", "Intimation" in the trigger field.
+   - USE "Intelligence Triggers" like "Strategic Expansion", "Order Win", "Governance Pivot".
 
 ══════════════════════════════════════════════════════════════
 THE 22-RULE INSTITUTIONAL INTELLIGENCE ENGINE (v1.0)

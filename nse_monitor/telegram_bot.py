@@ -98,8 +98,6 @@ class TelegramBot:
             {"command": "plan", "description": "💎 My Subscription & Expiry"},
             {"command": "hisab", "description": "📝 View Billing Logs (Hisab)"},
             {"command": "subscribe", "description": "🛒 Recharge / Upgrade"},
-            {"command": "bulk", "description": "📈 Today's Big Deals"},
-            {"command": "upcoming", "description": "🗓️ Corporate Calendar"},
             {"command": "support", "description": "🛠️ Contact Admin (WhatsApp)"}
         ]
         url = f"{self.base_url}/setMyCommands"
@@ -190,10 +188,6 @@ class TelegramBot:
                                 match = re.search(r'(pl_[a-zA-Z0-9]+)', text)
                                 link_id = match.group(1) if match else None
                                 await self._handle_check_payment(chat_id, link_id)
-                            # elif text == "/bulk":
-                            #     await self._handle_bulk_deals(chat_id)
-                            elif text == "/upcoming":
-                                await self._handle_upcoming(chat_id)
                             elif text == "/status":
                                 await self._handle_status(chat_id)
                             elif text.startswith("/login"):
@@ -601,18 +595,19 @@ class TelegramBot:
         if url and not url.startswith("http"):
             url = f"https://nsearchives.nseindia.com/corporate/{url}"
 
-        header = f"🛰️ <b>[{source}] {symbol.upper()}</b>"
-        if is_big_ticket: header = f"🔥🔥 <b>BIG TICKET: [{source}] {symbol.upper()}</b>"
+        # v5.9: Professional Intelligence Branding (Unified Header)
+        header = f"🛰️ <b>{symbol.upper()} | Bulkbeat TV</b>"
+        if is_big_ticket: header = f"🔥🔥 <b>BIG TICKET: {symbol.upper()} | Bulkbeat TV</b>"
 
         message = (
-            f"{header} | Signal Engine\n"
+            f"{header} | Intelligence Engine\n"
             f"────────────────────────\n"
             f"🎯 <b>TRIGGER:</b> {trigger}\n"
             f"📊 <b>IMPACT:</b> {impact_score}/10\n"
             f"🧠 <b>SENTIMENT:</b> {sentiment}\n"
             f"────────────────────────\n"
             f"👉 <a href='{url or '#'}'>Reference Filing</a>\n\n"
-            f"⚖️ <i>Non-SEBI Educational Resource</i>"
+            f"⚖️ <i>Bulkbeat TV — Non-SEBI Institutional Insights</i>"
         )
 
         active_users = self.db.get_active_users() if self.db else []
