@@ -143,8 +143,8 @@ class MarketIntelligenceSystem:
         self.sources = [
             NSESource(client=self.nse_client),
             NseSmeSource(client=self.nse_client),
-            EconomicTimesSource(),
-            MoneycontrolSource(),
+            # EconomicTimesSource(),
+            # MoneycontrolSource(),
             # BulkDealSource(nse_client=self.nse_client), # v5.2.3: Disabled per user request
         ]
 
@@ -381,7 +381,12 @@ class MarketIntelligenceSystem:
             content_hash = hashlib.sha256(hash_in.encode()).hexdigest()
 
             exists, _ = self.db.news_exists(item.get("url"), content_hash)
+            # v5.3: Enhanced headline-based deduplication to prevent cross-source duplicates
             if not exists:
+                if self.db.is_content_duplicate(item.get("headline"), content_hash):
+                    logger.info("Semantic block: duplicate headline suppressed for %s", item.get('headline')[:50])
+                    continue
+                
                 item["content_hash"] = content_hash
                 if self.db.add_news_item(item):
                     ingested += 1
@@ -389,7 +394,7 @@ class MarketIntelligenceSystem:
         await self.nudge_manager.run_audit()
         logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
-        pending = self.db.get_pending_news(limit=4)
+        pending = self.db.get_pending_news(limit=15)
         if not pending:
             return False
 
@@ -450,7 +455,8 @@ class MarketIntelligenceSystem:
                 return False
 
             allowed = [s.upper().strip() for s in ALLOWED_LIVE_SOURCES]
-            if source_name not in allowed and "ULTRA_STRICT" in ALERT_POLICY_MODE:
+            # v5.3: Hardened source restriction (independent of policy mode string)
+            if source_name not in allowed:
                 logger.info("Source restricted: %s from %s (ingest-only)", symbol, source_name)
                 self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                 return False
