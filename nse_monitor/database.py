@@ -231,6 +231,15 @@ class Database:
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_time ON alert_dispatch_log(dispatch_time)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_symbol ON alert_dispatch_log(symbol)")
 
+            # Runtime symbol cooldown store (DB-backed to reduce in-memory state).
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS symbol_cooldowns (
+                    symbol TEXT PRIMARY KEY,
+                    last_alert_ts REAL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Initial Config Seeds (v6.8: Institutional Policy 8/10)
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '8')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('media_mute', '0')")
@@ -417,6 +426,91 @@ class Database:
              "summary": r[4], "url": r[5], "timestamp": r[6]}
             for r in rows
         ]
+
+    def claim_pending_news(self, limit=4):
+        """Atomically claims pending items for processing (status: 0 -> 9)."""
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    """SELECT id, source, symbol, headline, summary, url, timestamp
+                       FROM news_items
+                       WHERE processing_status = 0
+                       ORDER BY created_at ASC
+                       LIMIT ?""",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+                if not rows:
+                    return []
+
+                ids = [r[0] for r in rows]
+                placeholders = ",".join(["?"] * len(ids))
+                self.conn.execute(
+                    f"UPDATE news_items SET processing_status = 9 WHERE id IN ({placeholders})",
+                    ids
+                )
+
+                return [
+                    {"db_id": r[0], "source": r[1], "symbol": r[2], "headline": r[3],
+                     "summary": r[4], "url": r[5], "timestamp": r[6]}
+                    for r in rows
+                ]
+
+    def set_processing_status(self, news_id, status):
+        """Direct status update for recovery paths (e.g., retry on processor failure)."""
+        try:
+            with self.lock:
+                with self.conn:
+                    self.conn.execute(
+                        "UPDATE news_items SET processing_status = ? WHERE id = ?",
+                        (int(status), news_id)
+                    )
+        except Exception as e:
+            logger.error(f"Error setting processing status for {news_id}: {e}")
+
+    def reset_inflight_news(self):
+        """Recovers in-flight claimed items (status=9) back to pending after restart/crash."""
+        try:
+            with self.lock:
+                with self.conn:
+                    self.conn.execute(
+                        "UPDATE news_items SET processing_status = 0 WHERE processing_status = 9"
+                    )
+                    recovered = self.conn.execute("SELECT changes()").fetchone()[0]
+            if recovered:
+                logger.warning("Recovered %s in-flight news items back to pending queue.", recovered)
+            return recovered
+        except Exception as e:
+            logger.error(f"Failed to recover in-flight news: {e}")
+            return 0
+
+    def get_symbol_last_alert_ts(self, symbol):
+        """Returns last alert unix ts for a symbol from DB-backed cooldown store."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT last_alert_ts FROM symbol_cooldowns WHERE symbol = ?",
+            (str(symbol).upper(),)
+        )
+        row = cursor.fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
+    def set_symbol_cooldown(self, symbol, ts=None):
+        """Upserts symbol cooldown timestamp in DB."""
+        ts = float(ts if ts is not None else time.time())
+        with self.lock:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO symbol_cooldowns (symbol, last_alert_ts, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(symbol) DO UPDATE SET last_alert_ts = excluded.last_alert_ts, updated_at = excluded.updated_at",
+                    (str(symbol).upper(), ts)
+                )
+
+    def clear_symbol_cooldowns(self):
+        """Clears cooldown table, used during daily reset."""
+        with self.lock:
+            with self.conn:
+                self.conn.execute("DELETE FROM symbol_cooldowns")
 
     def mark_analysis_complete(self, news_id, impact_score, sentiment, trigger=None, perspective=None, alerted=False, status=None):
         """v1.0: Updates a news item as Analyzed (status=1) or Alerted (status=2) or Queued (status=3)."""

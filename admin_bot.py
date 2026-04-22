@@ -23,6 +23,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("NSEAdmin")
+ALLOWED_AI_THRESHOLDS = {"4", "6", "8"}
 
 class AdminPanel:
     def __init__(self):
@@ -217,6 +218,9 @@ class AdminPanel:
             await self._handle_system_rescue(chat_id)
         elif data.startswith("set_threshold_"):
             val = data.split("_")[2]
+            if val not in ALLOWED_AI_THRESHOLDS:
+                await self._answer_callback(cb["id"], "Invalid threshold value.", show_alert=True)
+                return
             self.db.set_config("ai_threshold", val)
             await self._answer_callback(cb["id"], f"OK. AI Threshold set to {val}")
             # v6.7: Immediate State Override (Prevent DB-Lag Ghosting)
@@ -310,6 +314,8 @@ class AdminPanel:
     async def _show_config_menu(self, chat_id, edit_message_id=None, override_threshold=None, override_mute=None):
         # v7.1: State Synthesis (Priority: Override > DB > Default)
         thresh = override_threshold or self.db.get_config("ai_threshold", "8")
+        if thresh not in ALLOWED_AI_THRESHOLDS:
+            thresh = "8"
         mute = override_mute or self.db.get_config("media_mute", "0")
         
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"

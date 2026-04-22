@@ -6,7 +6,7 @@ import os
 sys.path.insert(0, '.')
 
 from nse_monitor.database import Database
-from nse_monitor.trading_calendar import TradingCalendar
+from nse_monitor.trading_calendar import TradingCalendar, NSE_HOLIDAYS
 from datetime import datetime
 import pytz
 
@@ -20,14 +20,12 @@ print("-" * 60)
 try:
     db = Database()
     users = db.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    subs = db.conn.execute("SELECT COUNT(*) FROM subscriptions WHERE active=1").fetchone()[0]
+    subs = db.conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[0]
     admins = db.conn.execute("SELECT COUNT(*) FROM admin_sessions").fetchone()[0]
     last_signal = db.get_config("last_signal_sent", "never")
     last_report = db.get_config("last_pre_market_report_date", "never")
-    db.close()
-    
     print(f"  ✓ Users registered:       {users}")
-    print(f"  ✓ Active subscriptions:   {subs}")
+    print(f"  ✓ Active subscribers:     {subs}")
     print(f"  ✓ Admin sessions:         {admins}")
     print(f"  ✓ Last signal sent:       {last_signal}")
     print(f"  ✓ Last report sent:       {last_report}")
@@ -78,7 +76,7 @@ try:
     status = "Trading" if is_trading else "Holiday/Weekend"
     print(f"  ✓ Current date (IST):      {now_ist.strftime('%Y-%m-%d %A')}")
     print(f"  ✓ Market status:           {status}")
-    print(f"  ✓ Holidays loaded:         {len(TradingCalendar.NSE_HOLIDAYS)} entries")
+    print(f"  ✓ Holidays loaded:         {len(NSE_HOLIDAYS)} entries")
 except Exception as e:
     print(f"  ✗ Calendar error: {e}")
 
@@ -157,12 +155,12 @@ print("""
    • VPS launcher paths (.venv resolution)
 
 ⏰ Next Scheduled Jobs (IST):
-   • 08:30 - Pre-market report (today: {'YES' if is_trading else 'SKIPPED (non-trading)'})
-   • Every 3 min - Data cycle (continuous)
+   • 08:30 - Morning queued signal dispatch (today: {'YES' if is_trading else 'SKIPPED (non-trading)'})
+   • Every 3 min - Ingestion cycle (continuous)
    • 16:00 - Daily billing check
    • 00:01 - Maintenance sweep
    • Sun 03:00 - Holiday calendar sync
 
-📊 Project Ready Status: ✅ PRODUCTION READY
+📊 Project State: ✅ RUNNING WITH HEALTH CHECK SUMMARY
 """)
 print("="*60 + "\n")

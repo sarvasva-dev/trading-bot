@@ -17,7 +17,14 @@ import gc
 import aiohttp
 import pytz
 
-from nse_monitor.config import BOT_NAME, LOGS_DIR, PID_FILE_NAME, ROOT_DIR
+from nse_monitor.config import (
+    BOT_NAME,
+    LOGS_DIR,
+    PID_FILE_NAME,
+    ROOT_DIR,
+    LIVE_ALERT_START_MINUTES,
+    LIVE_ALERT_END_MINUTES,
+)
 from nse_monitor.database import Database
 from nse_monitor.impact_tracker import ImpactTracker
 from nse_monitor.llm_processor import LLMProcessor
@@ -138,7 +145,6 @@ class MarketIntelligenceSystem:
 
         self.daily_alerts_count = 0
         self.last_budget_reset = None
-        self.cooldowns = {}
 
         self.sources = [
             NSESource(client=self.nse_client),
@@ -148,11 +154,11 @@ class MarketIntelligenceSystem:
             # BulkDealSource(nse_client=self.nse_client), # Permanently disabled per institutional audit
         ]
 
-        self.alert_memory = {}
         self.memory_lock = asyncio.Lock()
         self.notifier = TelegramNotifier()
         self.health_session = None # v5.2: Pooled session for diagnostic checks
         self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
+        self._queue_worker_task = None
         logger.info("================================================")
         logger.info("  Bulkbeat TV — The Pulse of Institutional Money")
         logger.info("  Market Intelligence Engine v3.0 ONLINE")
@@ -160,8 +166,10 @@ class MarketIntelligenceSystem:
 
     async def start_background_tasks(self):
         await self.bot.initialize()
+        self.db.reset_inflight_news()
         asyncio.create_task(self.bot.handle_updates_loop())
         asyncio.create_task(self.run_auto_backup_task())
+        self._queue_worker_task = asyncio.create_task(self.process_pending_queue_loop())
         self.watchdog.start()
 
 
@@ -169,9 +177,33 @@ class MarketIntelligenceSystem:
         now = datetime.now(self.ist)
         if not TradingCalendar.is_trading_day(now):
             return False
-        # v5.1: Live Signals from 8:30 AM to 4:30 PM (Pre-market + Market + Post-market)
+        # Live signals are restricted to configured market session timings.
         curr_min = now.hour * 60 + now.minute
-        return 510 <= curr_min < 930  # 08:30 AM to 15:30 PM (Strict Market Session)
+        return LIVE_ALERT_START_MINUTES <= curr_min < LIVE_ALERT_END_MINUTES
+
+    async def process_pending_queue_loop(self):
+        """Continuously process queued items so LLM + routing remain live."""
+        logger.info("Queue Worker: started.")
+        while True:
+            try:
+                processed = await self.process_pending_news_once(max_batches=4)
+                await asyncio.sleep(0.2 if processed else 1.0)
+            except Exception as e:
+                logger.error("Queue Worker failure: %s", e)
+                await asyncio.sleep(3)
+
+    async def process_pending_news_once(self, max_batches=1):
+        """Process bounded pending batches to preserve scrape cadence."""
+        processed_total = 0
+        for _ in range(max_batches):
+            pending = self.db.claim_pending_news(limit=5)
+            if not pending:
+                break
+            analysis_tasks = [self._process_single_item(item) for item in pending]
+            await asyncio.gather(*analysis_tasks, return_exceptions=True)
+            processed_total += len(pending)
+            await asyncio.sleep(0)
+        return processed_total
 
     async def eod_billing(self):
         now = datetime.now(self.ist)
@@ -242,7 +274,7 @@ class MarketIntelligenceSystem:
             logger.info(f"Morning Dispatch: Resetting daily alert budget (Old date: {self.last_budget_reset})")
             self.daily_alerts_count = 0
             self.last_budget_reset = now_dt
-            self.cooldowns = {}
+            self.db.clear_symbol_cooldowns()
 
         logger.info("Morning Dispatch: Scanning for Status=3 queued items...")
         queued_items = self.db.get_queued_news(hours=72)
@@ -285,7 +317,7 @@ class MarketIntelligenceSystem:
                 )
                 
                 self.daily_alerts_count += 1
-                self.cooldowns[symbol] = time.time()
+                self.db.set_symbol_cooldown(symbol, time.time())
                 
                 logger.info(f"Morning Dispatch: Sent {symbol} signal.")
                 await asyncio.sleep(1.5) # Flood protection
@@ -355,7 +387,7 @@ class MarketIntelligenceSystem:
         if self.last_budget_reset != today_date:
             self.daily_alerts_count = 0
             self.last_budget_reset = today_date
-            self.cooldowns = {}
+            self.db.clear_symbol_cooldowns()
             logger.info("Daily budget and cooldown state reset.")
 
         # v6.4: Real-time Status Audit (Proof of Logic)
@@ -405,43 +437,19 @@ class MarketIntelligenceSystem:
         await self.nudge_manager.run_audit()
         logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
-        # v5.4: Queue Draining Architecture (Zero-Lag)
-        # Instead of processing 4 items and sleeping 3 mins, we keep processing
-        # until the database queue is empty.
-        processed_this_cycle = 0
-        market_on = self.is_market_hours()
-        
-        while True:
-            pending = self.db.get_pending_news(limit=5) # Balanced batch for VPS RAM
-            if not pending:
-                if processed_this_cycle > 0:
-                    logger.info("Queue Drain: all %s pending items cleared.", processed_this_cycle)
-                break
-
-            analysis_tasks = [self._process_single_item(item, market_on) for item in pending]
-            results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
-            
-            # Handle results and errors
-            valid_results = [r for r in results if r is not None and not isinstance(r, Exception)]
-            processed_this_cycle += len(pending)
-            
-            # Log progress if backlog is large
-            if processed_this_cycle % 20 == 0:
-                logger.info("Queue Drain: processed %s items so far...", processed_this_cycle)
-            
-            # Small breath for event loop & API rate stability
-            await asyncio.sleep(0.5)
-
-        logger.info("Intelligence: analyzed=%s", processed_this_cycle)
+        # Keep scraping deterministic at 3-minute cadence; process one immediate batch.
+        processed_this_cycle = await self.process_pending_news_once(max_batches=1)
+        logger.info("Intelligence: analyzed=%s (immediate batch)", processed_this_cycle)
         gc.collect() # v5.2: Force RAM recovery after heavy processing
-        return processed_this_cycle > 0
+        return (ingested > 0) or (processed_this_cycle > 0)
 
-    async def _process_single_item(self, item, market_on):
+    async def _process_single_item(self, item):
         news_id = item["db_id"]
         from nse_monitor.config import ALERT_POLICY_MODE, ALLOWED_LIVE_SOURCES, DAILY_ALERT_HARD_CAP, NEUTRAL_BLOCK, SYMBOL_COOLDOWN_MIN
 
         pdf_path = None
         try:
+            market_on = self.is_market_hours()
             if item.get("url") and ".pdf" in item["url"].lower():
                 try:
                     loop = asyncio.get_event_loop()
@@ -474,7 +482,11 @@ class MarketIntelligenceSystem:
             
             # v5.7: Dynamic Threshold Control from Admin Panel
             db_threshold = self.db.get_config("ai_threshold")
-            min_score = int(db_threshold) if db_threshold else 8
+            try:
+                min_score = int(db_threshold) if db_threshold else 8
+            except (TypeError, ValueError):
+                min_score = 8
+            min_score = max(1, min(10, min_score))
             
             # v5.3: Institutional Policy Enforcement (Safety Floor)
             if ALERT_POLICY_MODE == "SENSITIVE_7PLUS" and min_score > 7:
@@ -501,7 +513,7 @@ class MarketIntelligenceSystem:
             #         return False
 
             # v5.4.1: Unified Policy Enforcement (Standardized for Score 8+)
-            if "EconomicTimes" in source_name or "Moneycontrol" in source_name:
+            if "ECONOMIC" in source_name or "MONEYCONTROL" in source_name:
                 if score < 8 and "ULTRA_STRICT" in ALERT_POLICY_MODE:
                     logger.info("Media suppression: %s is ingest-only (Score %s < 8)", symbol, score)
                     self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
@@ -523,8 +535,9 @@ class MarketIntelligenceSystem:
                 logger.info("[CAP_BYPASS_9_10] Emergency signal for %s (%s/10)", symbol, score)
 
             now_ts = time.time()
-            if symbol in self.cooldowns:
-                gap = (now_ts - self.cooldowns[symbol]) / 60
+            last_ts = self.db.get_symbol_last_alert_ts(symbol)
+            if last_ts is not None:
+                gap = (now_ts - last_ts) / 60
                 if gap < SYMBOL_COOLDOWN_MIN:
                     if score >= 9:
                         logger.info("[BYPASS_COOLDOWN] Priority alert for %s (%s/10)", symbol, score)
@@ -533,10 +546,8 @@ class MarketIntelligenceSystem:
                         self.db.mark_analysis_complete(news_id, score, sentiment, alerted=False)
                         return False
 
-            if score >= 7:
-                smart_money = await self.analyzer.analyze_smart_money(symbol)
-                if smart_money:
-                    analysis["smart_money"] = smart_money
+            # Re-check timing right before final routing for boundary accuracy.
+            market_on = self.is_market_hours()
 
             # v5.1: Final Dispatch Logic
             if not market_on:
@@ -564,7 +575,7 @@ class MarketIntelligenceSystem:
             
             self.db.mark_alert_sent(news_id)
             self.daily_alerts_count += 1
-            self.cooldowns[symbol] = now_ts
+            self.db.set_symbol_cooldown(symbol, now_ts)
             logger.info("Intelligence Hand-off: #%s %s queued for dispatch (%s/10)", self.daily_alerts_count, symbol, score)
 
             if market_on:
@@ -579,6 +590,7 @@ class MarketIntelligenceSystem:
             return analysis
         except Exception as e:
             logger.error("Critical failure in _process_single_item for %s: %s", item.get('symbol', 'N/A'), e)
+            self.db.set_processing_status(news_id, 0)
             return None
         finally:
             # v5.6: Handled by background task or manual cycle cleanup in main loop

@@ -3,6 +3,11 @@ import pytz
 import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from nse_monitor.config import (
+    ENABLE_MORNING_REPORT,
+    MORNING_QUEUE_DISPATCH_HOUR,
+    MORNING_QUEUE_DISPATCH_MINUTE,
+)
 from nse_monitor.trading_calendar import TradingCalendar, NSE_HOLIDAYS
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,10 @@ class MarketScheduler:
 
     async def _run_pre_market_report(self):
         """Run scheduled morning report exactly once per day in DB state."""
+        if not ENABLE_MORNING_REPORT:
+            logger.info("Pre-market report disabled by config. Skipping.")
+            return
+
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
         report_day = now.strftime("%Y-%m-%d")
         if self.system.db.get_config("last_pre_market_report_date", "") == report_day:
@@ -39,7 +48,7 @@ class MarketScheduler:
             self.system.db.set_config("last_pre_market_report_date", report_day)
 
     async def _run_morning_signal_dispatch(self):
-        """Dispatches individually queued signals at 08:30 AM (v5.0)."""
+        """Dispatches individually queued signals at configured morning time."""
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
         if not TradingCalendar.is_trading_day(now):
             return
@@ -48,21 +57,20 @@ class MarketScheduler:
         await self.system.send_queued_signals()
 
     async def _maybe_send_startup_catchup_report(self):
-        """If bot starts after 08:30 but before market open, send report immediately."""
+        """If bot starts shortly after morning dispatch time, run a one-time catch-up."""
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
         if not TradingCalendar.is_trading_day(now):
             return
         minutes_now = now.hour * 60 + now.minute
-        if not (510 <= minutes_now < 555):  # 08:30 inclusive to 09:15 exclusive
+        dispatch_minutes = MORNING_QUEUE_DISPATCH_HOUR * 60 + MORNING_QUEUE_DISPATCH_MINUTE
+        if not (dispatch_minutes <= minutes_now < dispatch_minutes + 60):
             return
 
         report_day = now.strftime("%Y-%m-%d")
-        if self.system.db.get_config("last_pre_market_report_date", "") == report_day:
-            return
-
-        logger.warning("Startup catch-up: dispatching delayed pre-market reports AND signals for %s.", report_day)
-        await self._run_morning_signal_dispatch() # v5.1 Fix
-        await self._run_pre_market_report()
+        logger.warning("Startup catch-up: dispatching delayed morning queue for %s.", report_day)
+        await self._run_morning_signal_dispatch()
+        if ENABLE_MORNING_REPORT and self.system.db.get_config("last_pre_market_report_date", "") != report_day:
+            await self._run_pre_market_report()
 
 
     async def safe_run_cycle(self):
@@ -92,15 +100,16 @@ class MarketScheduler:
             id='market_intel_cycle'
         )
 
-        # 2. Daily Pre-Market Multi-Source Report (08:30 IST)
-        self.scheduler.add_job(
-            self._run_pre_market_report,
-            'cron',
-            day_of_week='mon-fri',
-            hour=8,
-            minute=30,
-            id='pre_market_report'
-        )
+        # 2. Optional Daily Pre-Market Multi-Source Report (Disabled by default)
+        if ENABLE_MORNING_REPORT:
+            self.scheduler.add_job(
+                self._run_pre_market_report,
+                'cron',
+                day_of_week='mon-fri',
+                hour=MORNING_QUEUE_DISPATCH_HOUR,
+                minute=MORNING_QUEUE_DISPATCH_MINUTE,
+                id='pre_market_report'
+            )
 
         # 3. Daily Memory Flush (04:00 IST)
         import os
@@ -148,16 +157,19 @@ class MarketScheduler:
             id='holiday_sync'
         )
 
-        logger.info("Scheduler configured: 08:30 Reports | 00:01 Maintenance | 3-Min Polling.")
+        logger.info(
+            "Scheduler configured: Queue dispatch %02d:%02d IST | 00:01 Maintenance | 3-Min Polling.",
+            MORNING_QUEUE_DISPATCH_HOUR,
+            MORNING_QUEUE_DISPATCH_MINUTE,
+        )
         
-        # 8. Morning Signal Dispatch (08:30 IST)
-        # We run this alongside the report to ensure all intel hits at once
+        # 8. Morning Signal Dispatch (default 09:15 IST)
         self.scheduler.add_job(
             self._run_morning_signal_dispatch,
             'cron',
             day_of_week='mon-fri',
-            hour=8,
-            minute=30,
+            hour=MORNING_QUEUE_DISPATCH_HOUR,
+            minute=MORNING_QUEUE_DISPATCH_MINUTE,
             id='morning_signal_dispatch'
         )
 

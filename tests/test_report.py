@@ -1,5 +1,9 @@
 import asyncio
 import logging
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nse_monitor.database import Database
 from nse_monitor.report_builder import ReportBuilder
@@ -37,7 +41,6 @@ def test_report_builder_generates_text():
     builder = ReportBuilder(DummyBot(), db, DummyLLM())
     # Monkeypatch async sources to avoid network calls
     builder.global_source.fetch_indices = _fake_indices
-    builder.bulk_source.get_deals_for_report = _fake_bulk
     report = asyncio.run(builder.build_pre_market_report(hours=1))
     assert isinstance(report, str)
     assert "NSE PULSE" in report

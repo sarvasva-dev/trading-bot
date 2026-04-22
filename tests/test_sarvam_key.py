@@ -1,30 +1,32 @@
-from sarvamai import SarvamAI
 import os
+import asyncio
+import pytest
+import sys
 
-# Key provided by user
-API_KEY = "sk_m2lt55jk_LvxJ8hWcocMtUyDkDigLCLXs"
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def test_sarvam():
-    print(f"Testing Sarvam AI Key...")
-    
-    try:
-        client = SarvamAI(api_subscription_key=API_KEY)
-        
-        response = client.chat.completions(
-            model="sarvam-30b",
-            messages=[
-                {"role": "user", "content": "Hey, confirm you are working."}
-            ]
-        )
-        
-        print("\nResponse from Sarvam:")
-        print(response)
-        print("\nSUCCESS: Sarvam AI API is working!")
-        return True
-        
-    except Exception as e:
-        print(f"\nERROR: Sarvam failed: {e}")
-        return False
+from nse_monitor.llm_processor import LLMProcessor
 
-if __name__ == "__main__":
-    test_sarvam()
+
+@pytest.mark.integration
+def test_sarvam_key():
+    if not os.getenv("SARVAM_API_KEY", "").strip():
+        pytest.skip("SARVAM_API_KEY not set")
+
+    processor = LLMProcessor()
+    async def _run():
+        try:
+            return await processor.analyze_news(
+                company="TESTCO",
+                text="Company wins confirmed Rs 500 crore order from PSU; execution starts next quarter.",
+                source_type="NSE",
+                market_status="OPEN",
+            )
+        finally:
+            await processor.close()
+
+    result = asyncio.run(
+        _run()
+    )
+    assert isinstance(result, dict)
+    assert "impact_score" in result

@@ -86,6 +86,18 @@ NEUTRAL_BLOCK = int(os.getenv("NEUTRAL_BLOCK", 1))
 ALLOWED_LIVE_SOURCES = os.getenv("ALLOWED_LIVE_SOURCES", "NSE,NSE_SME,NSE_BULK").split(",")
 TELEGRAM_SEND_PDF = False
 
+# 7.1 Session Timing Controls
+# Live alerts go only during the live market window (default: 08:30-15:30 IST as existing setup).
+LIVE_ALERT_START_MINUTES = int(os.getenv("LIVE_ALERT_START_MINUTES", 510))  # 08:30
+LIVE_ALERT_END_MINUTES = int(os.getenv("LIVE_ALERT_END_MINUTES", 930))      # 15:30
+
+# Queue dispatch time for carrying overnight/after-hours intelligence to next trading day.
+MORNING_QUEUE_DISPATCH_HOUR = int(os.getenv("MORNING_QUEUE_DISPATCH_HOUR", 8))
+MORNING_QUEUE_DISPATCH_MINUTE = int(os.getenv("MORNING_QUEUE_DISPATCH_MINUTE", 30))
+
+# Pre-market summary/report switch. Disabled by default per live-signal-first workflow.
+ENABLE_MORNING_REPORT = os.getenv("ENABLE_MORNING_REPORT", "0").strip() == "1"
+
 # 8. Bulk Intelligence Policy (V4.2.1)
 BULK_REPORT_MIN_VAL_CR = int(os.getenv("BULK_REPORT_MIN_VAL_CR", 5))
 BULK_MAX_ITEMS_REPORT = int(os.getenv("BULK_MAX_ITEMS_REPORT", 5))
