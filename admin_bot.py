@@ -10,6 +10,7 @@ import shutil
 from datetime import datetime
 import pytz
 import bcrypt
+import atexit
 from nse_monitor.config import TELEGRAM_ADMIN_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_ADMIN_CHAT_IDS, ADMIN_PASSWORD_HASH, BOT_NAME, TELEGRAM_BOT_TOKEN, ADMIN_SESSION_TIMEOUT_MINUTES
 from nse_monitor.database import Database
 
@@ -24,6 +25,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger("NSEAdmin")
 ALLOWED_AI_THRESHOLDS = {"4", "6", "8"}
+
+
+def _admin_pid_file():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "admin_bot.pid"))
+
+
+def _cleanup_admin_pid(pid_file):
+    try:
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except Exception:
+        pass
+
+
+def ensure_single_admin_instance():
+    pid_file = _admin_pid_file()
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip())
+            if psutil.pid_exists(old_pid):
+                logger.error("Admin bot already running (PID %s). Exiting.", old_pid)
+                return False
+            _cleanup_admin_pid(pid_file)
+        except Exception:
+            _cleanup_admin_pid(pid_file)
+
+    with open(pid_file, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    atexit.register(lambda: _cleanup_admin_pid(pid_file))
+    return True
 
 class AdminPanel:
     def __init__(self):
@@ -633,6 +665,7 @@ class AdminPanel:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(AdminPanel().run())
+        if ensure_single_admin_instance():
+            asyncio.run(AdminPanel().run())
     except KeyboardInterrupt:
         pass
