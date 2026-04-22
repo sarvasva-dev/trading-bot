@@ -615,11 +615,15 @@ async def main():
 
     await system.start_background_tasks()
 
-    from admin_bot import AdminPanel
+    from nse_monitor.config import ENABLE_EMBEDDED_ADMIN_BOT
+    if ENABLE_EMBEDDED_ADMIN_BOT:
+        from admin_bot import AdminPanel
 
-    admin_panel = AdminPanel()
-    asyncio.create_task(admin_panel.run())
-    logger.info("Admin dashboard bot started.")
+        admin_panel = AdminPanel()
+        asyncio.create_task(admin_panel.run())
+        logger.info("Admin dashboard bot started (embedded mode).")
+    else:
+        logger.info("Embedded admin bot disabled. Use standalone admin_bot.py process.")
 
     if not await system.health_check():
         logger.critical("FATAL: Health check failed. Shutting down.")
