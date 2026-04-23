@@ -436,8 +436,10 @@ class MarketIntelligenceSystem:
                 if self.db.add_news_item(item):
                     ingested += 1
 
-        # v3.1: Prune stale queue items first to prevent 18hr backlog blocking fresh news
-        self.db.expire_stale_pending_news(max_age_hours=4)
+        # v3.1.1: Stale pruner ONLY during market hours (09:15-15:30)
+        # Off-hours: overnight news process honi chahiye for 8:30 AM morning dispatch
+        if self.is_market_hours():
+            self.db.expire_stale_pending_news(max_age_hours=4)
         await self.nudge_manager.run_audit()
         logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
