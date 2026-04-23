@@ -155,6 +155,8 @@ class MarketIntelligenceSystem:
         ]
 
         self.memory_lock = asyncio.Lock()
+        # v3.1: Gates concurrent LLM calls; same 5-peak as before but non-blocking async wait
+        self._llm_sem = asyncio.Semaphore(5)
         self.notifier = TelegramNotifier()
         self.health_session = None # v5.2: Pooled session for diagnostic checks
         self.watchdog = BotWatchdog(self.notifier, os.path.join(ROOT_DIR, "logs", "service.log"))
@@ -196,7 +198,7 @@ class MarketIntelligenceSystem:
         """Process bounded pending batches to preserve scrape cadence."""
         processed_total = 0
         for _ in range(max_batches):
-            pending = self.db.claim_pending_news(limit=5)
+            pending = self.db.claim_pending_news(limit=10)  # v3.1: 2x batch throughput
             if not pending:
                 break
             analysis_tasks = [self._process_single_item(item) for item in pending]
@@ -434,6 +436,8 @@ class MarketIntelligenceSystem:
                 if self.db.add_news_item(item):
                     ingested += 1
 
+        # v3.1: Prune stale queue items first to prevent 18hr backlog blocking fresh news
+        self.db.expire_stale_pending_news(max_age_hours=4)
         await self.nudge_manager.run_audit()
         logger.info("Pipeline: fetched=%s ingested=%s", fetched_count, ingested)
 
@@ -460,9 +464,11 @@ class MarketIntelligenceSystem:
                 except Exception:
                     pass
 
-            analysis = await self.llm_processor.analyze_single_event(
-                [item], market_status="OPEN" if market_on else "CLOSED", source_name=item.get("source")
-            )
+            # v3.1: Semaphore-gated LLM call (non-blocking async wait; 1GB RAM safe)
+            async with self._llm_sem:
+                analysis = await self.llm_processor.analyze_single_event(
+                    [item], market_status="OPEN" if market_on else "CLOSED", source_name=item.get("source")
+                )
             if not analysis:
                 self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
                 return None

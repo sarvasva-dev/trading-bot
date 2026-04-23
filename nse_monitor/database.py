@@ -98,9 +98,9 @@ class Database:
 
     def _create_table(self):
         with self.conn:
-            # v1.3.2: Industrial Concurrency (WAL mode + FULL sync)
+            # v3.1: WAL + NORMAL sync. NORMAL is safe with WAL; eliminates disk flush per write (~50x faster on VPS).
             self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA synchronous=FULL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
             
             # Legacy table for NSE Announcements
             self.conn.execute("""
@@ -483,6 +483,25 @@ class Database:
             return recovered
         except Exception as e:
             logger.error(f"Failed to recover in-flight news: {e}")
+            return 0
+
+    def expire_stale_pending_news(self, max_age_hours=4):
+        """v3.1: Discard stale pending items (older than N hours), score=0, no LLM.
+        Prevents multi-hour backlog from blocking fresh market news on each cycle."""
+        try:
+            with self.lock:
+                with self.conn:
+                    self.conn.execute(
+                        "UPDATE news_items SET processing_status=1, impact_score=0, sentiment=?"
+                        " WHERE processing_status=0 AND created_at < datetime('now', '-'||?||' hours')",
+                        ("Expired", str(int(max_age_hours)))
+                    )
+                    count = self.conn.execute("SELECT changes()").fetchone()[0]
+            if count:
+                logger.info("Stale Pruner: %s items expired (>%sh old).", count, max_age_hours)
+            return count
+        except Exception as e:
+            logger.error("Stale Pruner failed: %s", e)
             return 0
 
     def get_symbol_last_alert_ts(self, symbol):
