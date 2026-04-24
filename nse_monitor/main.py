@@ -429,7 +429,7 @@ class MarketIntelligenceSystem:
             # v5.3: Enhanced headline-based deduplication to prevent cross-source duplicates
             if not exists:
                 if self.db.is_content_duplicate(item.get("headline"), content_hash):
-                    logger.info("Semantic block: duplicate headline suppressed for %s", item.get('headline')[:50])
+                    logger.debug("Semantic block: duplicate headline suppressed for %s", item.get('headline')[:50])
                     continue
                 
                 item["content_hash"] = content_hash
