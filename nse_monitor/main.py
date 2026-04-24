@@ -449,6 +449,35 @@ class MarketIntelligenceSystem:
         gc.collect() # v5.2: Force RAM recovery after heavy processing
         return (ingested > 0) or (processed_this_cycle > 0)
 
+    def _is_routine_news(self, headline, summary):
+        """Pre-LLM Code Filter to reject routine NSE filings immediately (Rule #14 & others)."""
+        text = (headline + " " + summary).lower()
+        
+        routine_keywords = [
+            "regulation 74(5)", "regulation 40(9)", "compliance certificate",
+            "annual report", "copy of newspaper publication", "published in newspaper",
+            "audio recording of earnings call", "transcript of earnings call", 
+            "audio recording", "transcript", "schedule of analyst", "analyst meeting",
+            "intimation of book closure", "closure of trading window", "trading window",
+            "loss of share certificate", "issue of duplicate share",
+            "employee stock option", "esop",
+            "appointment of independent director", "resignation of independent director",
+            "postal ballot", "voting results", "change in registered office",
+            "board meeting intimation", "intimation of board meeting",
+            "secretarial compliance report", "reaffirmation of credit rating",
+            "allotment of equity shares"
+        ]
+        
+        safe_triggers = ["bonus", "dividend", "split", "buyback", "fund raising", "merger", "acquisition", "order", "deal"]
+
+        for kw in routine_keywords:
+            if kw in text:
+                if ("board meeting" in kw or "analyst" in kw or "allotment" in kw) and any(safe in text for safe in safe_triggers):
+                    continue
+                return True, f"Routine keyword: '{kw}'"
+        
+        return False, ""
+
     async def _process_single_item(self, item):
         news_id = item["db_id"]
         from nse_monitor.config import ALERT_POLICY_MODE, ALLOWED_LIVE_SOURCES, DAILY_ALERT_HARD_CAP, NEUTRAL_BLOCK, SYMBOL_COOLDOWN_MIN
@@ -465,6 +494,17 @@ class MarketIntelligenceSystem:
                         item["summary"] = item.get("summary", "") + f"\n[ENRICHMENT]: {text[500:2000]}"
                 except Exception:
                     pass
+
+            # --- PRE-LLM FILTER (Code-Based Rejection) ---
+            is_junk, reason = self._is_routine_news(item.get("headline", ""), item.get("summary", ""))
+            if is_junk:
+                logger.info("Filtered (Pre-LLM): #%s %s - %s", news_id, item.get('symbol', 'N/A'), reason)
+                self.db.mark_analysis_complete(news_id, 0, "Neutral", alerted=False)
+                if pdf_path and os.path.exists(pdf_path):
+                    try: os.remove(pdf_path)
+                    except: pass
+                return False
+            # ---------------------------------------------
 
             # v3.1: Semaphore-gated LLM call (non-blocking async wait; 1GB RAM safe)
             async with self._llm_sem:

@@ -1,50 +1,47 @@
-# 🎯 Bulkbeat TV v20.0 — Project Status Log
+# Bulkbeat TV - Project Status (April 2026)
 
-## ✅ OVERALL STATUS: PRODUCTION READY (INSTITUTIONAL GRADE)
+## Overall Status
 
-Bulkbeat TV has passed the comprehensive **Institutional Intelligence Audit (April 2026)**. The system is currently operating in its most stable, high-precision state with real-time administrative governance.
+Production running and stable after queue, admin, and scheduling hardening.
 
----
+## Confirmed Stable Areas
 
-## 📊 Technical Architecture Status
+- 3-minute scheduler ingestion active
+- atomic queue claim and in-flight recovery active
+- Sarvam-only LLM path active
+- market-time live routing and off-market queue routing active
+- admin panel single-response behavior fixed
 
-| Module | Status | Version |
-|--------|--------|---------|
-| **Ingestion Engine** | **ACTIVE** | v20.0 |
-| **AI Audit Protocol** | **LOCKED** | v20.0 (Threshold 8) |
-| **Admin Control Panel** | **ACTIVE** | v20.0 (Shield UI) |
-| **Reporting System** | **ACTIVE** | v20.0 |
-| **Data Integrity** | **STABLE** | SQLite WAL |
+## Key Runtime Decisions
 
----
+- Embedded admin bot is disabled by default.
+- Standalone admin bot is recommended.
+- Morning report is disabled by default.
+- Morning queued dispatch remains enabled.
+- Threshold defaults to strict mode (`8`), but admin can set `4/6/8`.
 
-## 🔧 Final Audit Enhancements (Completed)
+## Recent Fixes Included
 
-#### 1. Intelligence Hardening
-- ✅ **Dynamic Threshold Policy**: Implemented 4/6/8 sensitivity scale with real-time override.
-- ✅ **Institutional Shield**: Defaulted minimum impact score to 8/10 for exchange filings.
-- ✅ **Media Ingestion Control**: Added "Media Mute" feature to suppress non-official news sources.
+1. Duplicate admin response prevention:
+- embedded admin gating
+- standalone admin PID lock
 
-#### 2. Administrative Controls
-- ✅ **Real-Time UI Synchronization**: Shield indicator 🛡️ and IST live timestamp added to the dashboard.
-- ✅ **Dynamic Broadcasts**: Implemented professional pipe-separator logic (`TITLE | MESSAGE`).
-- ✅ **Process Governance**: Finalized authoritative cleanup and restart protocol (The "Brahmastra" command).
+2. Queue integrity:
+- `claim_pending_news` atomic claim
+- `reset_inflight_news` on startup
+- retry-safe status reset on processing failure
 
-#### 3. Brand & Professionalism
-- ✅ **English-Only Documentation**: Fully migrated to professional English documentation for institutional consistency.
-- ✅ **Logger Sanitization**: Renamed internal system loggers to `BulkbeatTV` Branding.
+3. Low-RAM stability:
+- DB-backed symbol cooldown state
+- bounded queue processing loop
 
----
+## Current Risk Notes
 
-## 📋 Pre-Flight Ops Checklist
+- Heavy duplicate-source churn causes high "Semantic block" log volume.
+- Documentation and runbooks are now synced to actual runtime behavior.
 
-- [x] Institutional `ai_threshold` (8) verified in Database.
-- [x] Admin `/broadcast` dynamic header test completed.
-- [x] Systemd `nsebot.service` active and healthy.
-- [x] Logs are strictly formatted with IST timestamps.
-- [x] All legacy Hinglish documentation has been purged.
+## Recommended Ops Baseline
 
----
-
-**Last Audit: April 21, 2026**
-**Current State: Final Institutional Release**
+- Keep threshold at `8` for low-noise operation.
+- Ensure only one admin bot process exists.
+- Monitor queue snapshot periodically, especially `status=9`.

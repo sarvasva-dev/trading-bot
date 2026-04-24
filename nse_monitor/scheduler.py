@@ -163,7 +163,7 @@ class MarketScheduler:
             MORNING_QUEUE_DISPATCH_MINUTE,
         )
         
-        # 8. Morning Signal Dispatch (default 09:15 IST)
+        # 8. Morning Signal Dispatch (configurable; default 08:30 IST)
         self.scheduler.add_job(
             self._run_morning_signal_dispatch,
             'cron',

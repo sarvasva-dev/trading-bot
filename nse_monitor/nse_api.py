@@ -112,7 +112,31 @@ class NSEClient:
                 response.raise_for_status()
                 data = await response.json()
             
-            return data if isinstance(data, list) else data.get('data', [])
+            raw_list = data if isinstance(data, list) else data.get('data', [])
+            
+            # v5.6: Strict Local 24-Hour Filtering (because NSE API sometimes ignores from_date/to_date and returns 1 week of data)
+            filtered_data = []
+            for item in raw_list:
+                dt_str = item.get('an_dt') or item.get('dt')
+                if dt_str:
+                    try:
+                        if 'T' in dt_str:
+                            item_dt = datetime.strptime(dt_str[:19], "%Y-%m-%dT%H:%M:%S")
+                        else:
+                            item_dt = datetime.strptime(dt_str[:20].strip(), "%d-%b-%Y %H:%M:%S")
+                        
+                        # Only keep items from the last 24 hours
+                        if (now_ist.replace(tzinfo=None) - item_dt).total_seconds() <= 86400:
+                            filtered_data.append(item)
+                    except Exception:
+                        filtered_data.append(item) # fallback if date parsing fails
+                else:
+                    filtered_data.append(item)
+            
+            if len(raw_list) != len(filtered_data):
+                logger.info(f"NSE API returned {len(raw_list)} items, locally filtered to {len(filtered_data)} (24hr).")
+            
+            return filtered_data
 
     async def get_json(self, url, params=None, referer=None, warmup=None):
         """Generic robust async JSON fetcher."""

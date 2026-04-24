@@ -1,140 +1,98 @@
-# Bulkbeat TV v20.0 — VPS Deployment Guide (Ubuntu 22.04 LTS)
+# VPS Deployment Guide (Ubuntu 22.04, 1GB RAM)
 
-This guide details the procedure for deploying or upgrading the **Bulkbeat TV** institutional intelligence engine on a resource-constrained (1GB RAM) Linux VPS.
+## Preconditions
 
-## 🏛️ Pre-Deployment Checklist
-- [ ] SSH access to the target server.
-- [ ] Prepared `.env` file with latest API keys (Sarvam, Telegram).
-- [ ] Verified database snapshot (mandatory before upgrades).
+- SSH access
+- `.env` prepared with valid tokens/keys
+- recent DB backup available
 
----
-
-## 1. System Preparation & Cleanup
-
-Before installation, ensure the environment is clean and dependencies are met.
+## 1. Host Setup
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install python3-pip python3-venv git tesseract-ocr -y
 ```
 
-### Stop Existing Services
-```bash
-sudo systemctl stop nsebot 2>/dev/null || true
-pkill -f admin_bot.py 2>/dev/null || true
-```
-
----
-
-## 2. Code Deployment & Environment
+## 2. App Setup
 
 ```bash
-git clone <repository_url>
-cd nse2
-
-# Initialize Virtual Environment
-python3 -m venv venv
-source venv/bin/activate
+git clone <repository_url> trading-bot
+cd trading-bot
+python3 -m venv .venv
+source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Database Migration (v20.0 Institutional Shield)
-```bash
-# This step ensures the default Threshold 8 and re-branding are applied
-python migrate_v7.py
+## 3. Systemd Service (`nsebot`)
 
-# Perform a health check to verify AI and Telegram availability
-python -m nse_monitor.main --health
-```
-
----
-
-## 3. Systemd Intelligence Engine Configuration
-
-Create or update `/etc/systemd/system/nsebot.service`:
+Use `.venv` in service command.
 
 ```ini
 [Unit]
-Description=Bulkbeat TV v20.0 Institutional Intelligence Engine
+Description=Bulkbeat TV Intelligence Engine
 After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/nse2
-EnvironmentFile=/root/nse2/.env
-ExecStart=/root/nse2/venv/bin/python -m nse_monitor.main
+User=ipynb
+WorkingDirectory=/home/ipynb/trading-bot
+EnvironmentFile=/home/ipynb/trading-bot/.env
+ExecStart=/home/ipynb/trading-bot/.venv/bin/python -m nse_monitor.main
 Environment="PYTHONUNBUFFERED=1"
 Restart=always
-RestartSec=10
-StandardOutput=append:/root/nse2/nse_monitor/logs/systemd.log
-StandardError=append:/root/nse2/nse_monitor/logs/systemd.log
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+Then:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable nsebot
+sudo systemctl restart nsebot
+```
+
+## 4. Admin Bot (Standalone)
+
+```bash
+pkill -f admin_bot.py || true
+nohup ./.venv/bin/python admin_bot.py > admin_bot.log 2>&1 &
+```
+
+## 5. Permissions Fix (If DB Becomes Readonly)
+
+```bash
+sudo systemctl stop nsebot
+pkill -f admin_bot.py || true
+sudo chown -R ipynb:ipynb /home/ipynb/trading-bot
+sudo chmod -R u+rwX /home/ipynb/trading-bot/nse_monitor/data
 sudo systemctl start nsebot
+nohup /home/ipynb/trading-bot/.venv/bin/python /home/ipynb/trading-bot/admin_bot.py > /home/ipynb/trading-bot/admin_bot.log 2>&1 &
 ```
 
----
-
-## 4. Admin Control Panel Initialization
-
-The Admin Bot must be started as a persistent background process to enable real-time synchronization.
+## 6. Operational Checks
 
 ```bash
-# Definitive Restart & Background Initialization
-nohup python admin_bot.py > admin_bot.log 2>&1 &
+sudo systemctl status nsebot --no-pager -l
+pgrep -af "python -m nse_monitor.main"
+pgrep -af "admin_bot.py"
+tail -n 100 nse_monitor/logs/app.log
+tail -n 100 admin_bot.log
 ```
 
----
+## 7. Runtime Defaults
 
-## 5. Operations & Verification
+- Ingestion interval: every 3 minutes
+- Live market window: 08:30 to 15:30 IST
+- Morning queued dispatch: 08:30 IST
+- Morning report: disabled by default
+- Embedded admin bot: disabled by default
 
-### Audit Logs
-```bash
-# Stream the intelligence cycle
-tail -f nse_monitor/logs/service.log
+## 8. 1GB RAM Notes
 
-# Stream systemd outputs
-journalctl -u nsebot -f
-```
-
-### Expected Initialization Output:
-```
-================================================
-  Bulkbeat TV — The Pulse of Institutional Money
-  Market Intelligence Engine v20.0 ONLINE
-================================================
->>> Intelligence Cycle Started | Threshold=8 | Media=ACTIVE
-```
-
----
-
-## 🏗️ 1GB RAM Optimization Notes
-
-- **Target RAM Usage**: 200–400 MB.
-- **Memory Recycling**: The system performs an automated memory flush (`os._exit(0)`) every Sunday at 02:00 IST to prevent accumulated leak buildup.
-- **OCR Throttling**: PDF extraction is performed serially to avoid CPU/RAM spikes.
-
----
-
-## 🗓️ Intelligence Schedule (IST)
-
-| Job | Time | Frequency |
-|-----|------|-----------|
-| Intelligence Cycle | Every 3 min | Continuous |
-| Payment Gateway Check | Every 5 min | Continuous |
-| **Morning Signal Report**| **08:30** | Mon-Fri |
-| **Institutional Billing** | **16:00** | Mon-Fri |
-| System Maintenance | 00:01 | Daily |
-| Weekly Memory Flush | Sun 02:00 | Weekly |
-| Market Holiday Sync | Sun 03:00 | Weekly |
-
----
-*Developed by Bulkbeat TV Institutional Group.*
+- Keep threshold at 8 for low-noise stability.
+- Keep single admin process only.
+- Monitor queue statuses and avoid process duplication.
