@@ -199,7 +199,7 @@ class AdminPanel:
                 logger.warning(f"New Admin Login: {chat_id}")
             else:
                 self.failed_logins.setdefault(chat_id, []).append(now)
-                remaining = 3 - len(self.failed_logins[chat_id])
+                remaining = max(0, 3 - len(self.failed_logins[chat_id]))
                 await self._send(chat_id, f"<b>Invalid Credentials.</b> {remaining} attempts remaining.")
             return
 
