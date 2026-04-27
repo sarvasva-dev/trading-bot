@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = '/home/ipynb/trading-bot/data/market_intelligence.db'
+DB_PATH = '/home/ipynb/trading-bot/nse_monitor/data/processed_announcements.db'
 
 def reset_today():
     if not os.path.exists(DB_PATH):
