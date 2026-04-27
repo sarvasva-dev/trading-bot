@@ -428,7 +428,7 @@ class MarketIntelligenceSystem:
             exists, _ = self.db.news_exists(item.get("url"), content_hash)
             # v5.3: Enhanced headline-based deduplication to prevent cross-source duplicates
             if not exists:
-                if self.db.is_content_duplicate(item.get("headline"), content_hash):
+                if self.db.is_content_duplicate(item.get("headline"), content_hash, item.get("symbol")):
                     logger.debug("Semantic block: duplicate headline suppressed for %s", item.get('headline')[:50])
                     continue
                 

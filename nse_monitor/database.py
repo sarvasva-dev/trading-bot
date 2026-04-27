@@ -347,7 +347,7 @@ class Database:
         cursor.execute("SELECT id FROM news_items WHERE url = ?", (url,))
         return cursor.fetchone() is not None
 
-    def is_content_duplicate(self, headline, content_hash):
+    def is_content_duplicate(self, headline, content_hash, symbol=None):
         """Checks if content is duplicate based on Hash OR Headline."""
         cursor = self.conn.cursor()
         
@@ -356,8 +356,14 @@ class Database:
             cursor.execute("SELECT id FROM news_items WHERE content_hash = ?", (content_hash,))
             if cursor.fetchone(): return True
         
-        # 2. Headline Check (Headline Match within 48 hours to allow recurring reports)
-        if headline:
+        # 2. Headline Check (Headline + Symbol Match within 48 hours to allow recurring reports)
+        if headline and symbol:
+            cursor.execute(
+                "SELECT id FROM news_items WHERE headline = ? AND symbol = ? AND created_at > datetime('now', '-2 days')", 
+                (headline, symbol)
+            )
+            if cursor.fetchone(): return True
+        elif headline:
             cursor.execute(
                 "SELECT id FROM news_items WHERE headline = ? AND created_at > datetime('now', '-2 days')", 
                 (headline,)
