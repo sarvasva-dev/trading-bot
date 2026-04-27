@@ -190,6 +190,8 @@ class TelegramBot:
                                 await self._handle_check_payment(chat_id, link_id)
                             elif text == "/status":
                                 await self._handle_status(chat_id)
+                            elif text == "/signals":
+                                await self._handle_signals(chat_id)
                             elif text.startswith("/login"):
                                 await self._handle_login(chat_id, text, msg["message_id"])
                             elif text == "/admin":
@@ -277,6 +279,40 @@ class TelegramBot:
             ]
         }
         await self._send_raw(chat_id, msg, keyboard)
+
+    @rate_limit(max_calls=5, period=60)
+    async def _handle_signals(self, chat_id):
+        """FR-01: View last 10 dispatched signals."""
+        user = self.db.get_user(chat_id)
+        if not user or user[3] == 0:
+            await self._send_raw(chat_id, "❌ <b>Premium Feature</b>\nThis command is only available to active subscribers.")
+            return
+
+        signals = self.db.get_last_signals(10)
+        if not signals:
+            await self._send_raw(chat_id, "📡 <b>No Recent Signals</b>\nThe engine hasn't dispatched any alerts recently.")
+            return
+
+        msg = "📡 <b>LAST 10 MARKET SIGNALS</b>\n────────────────────────\n"
+        for idx, s in enumerate(signals, 1):
+            time_str = s['dispatch_time'].split('.')[0] if s['dispatch_time'] else 'N/A'
+            score_icon = "🔥" if s['score'] >= 8 else "⚡"
+            
+            # Format headline summary (truncate if too long)
+            headline = s['headline'] or 'No Headline'
+            if len(headline) > 40:
+                headline = headline[:37] + "..."
+                
+            msg += (
+                f"<b>{idx}. #{s['symbol']}</b> | Score: {s['score']}/10 {score_icon}\n"
+                f"   🕒 <i>{time_str}</i>\n"
+                f"   📝 <i>{headline}</i>\n"
+            )
+            if s['url']:
+                msg += f"   🔗 <a href='{s['url']}'>View Document</a>\n"
+            msg += "────────────────────────\n"
+            
+        await self._send_raw(chat_id, msg, disable_web_preview=True)
 
     async def _send_welcome(self, chat_id, first_name):
         """Unified Dashboard, Disclaimer and Onboarding (v10.2)."""

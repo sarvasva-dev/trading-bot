@@ -1085,3 +1085,26 @@ class Database:
             "impact_score": row[10], "sentiment": row[11]
         }
 
+    def get_last_signals(self, limit=10):
+        """FR-01: Returns last N dispatched signals for /signals command."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT a.symbol, a.score, a.sentiment, a.trigger_class, a.dispatch_time, n.headline, n.url
+            FROM alert_dispatch_log a
+            LEFT JOIN news_items n ON a.news_id = n.id
+            ORDER BY a.dispatch_time DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        return [
+            {
+                "symbol": r[0],
+                "score": r[1],
+                "sentiment": r[2],
+                "trigger": r[3],
+                "dispatch_time": r[4],
+                "headline": r[5],
+                "url": r[6]
+            }
+            for r in rows
+        ]
