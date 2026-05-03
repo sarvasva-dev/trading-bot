@@ -1,7 +1,12 @@
 import logging
 import numpy as np
 import pickle
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -13,12 +18,13 @@ class EventClusterer:
         try:
             import psutil
             total_ram_gb = psutil.virtual_memory().total / (1024**3)
-            if total_ram_gb >= 1.5: # Only load model if we have > 1.5GB total RAM
+            if HAS_TRANSFORMERS and total_ram_gb >= 1.5: # Only load model if we have > 1.5GB total RAM
                 self.enabled = True
                 logger.info(f"Initializing Semantic Clusterer (RAM: {total_ram_gb:.1f}GB)...")
                 self.model = SentenceTransformer(model_name)
             else:
-                logger.warning(f"Low RAM ({total_ram_gb:.1f}GB). DISABLING Semantic Clusterer to prevent OOM.")
+                reason = "Transformers missing" if not HAS_TRANSFORMERS else f"Low RAM ({total_ram_gb:.1f}GB)"
+                logger.warning(f"{reason}. DISABLING Semantic Clusterer.")
         except ImportError:
             logger.warning("psutil not found. DISABLING Semantic Clusterer for safety.")
         

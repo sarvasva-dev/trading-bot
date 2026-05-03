@@ -15,4 +15,5 @@ psutil
 pytesseract
 opencv-python
 Pillow
-sentence-transformers
+aiohttp
+bcrypt
