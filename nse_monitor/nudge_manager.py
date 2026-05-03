@@ -39,8 +39,8 @@ class NudgeManager:
         users = self.db.get_users_by_remaining_days(1)
         for user_id in users:
             msg = (
-                "⏳ <b>Final Trial Day!</b>\n"
-                "Your 2-day Institutional Trial expires in 1 market-day.\n\n"
+                "⏳ <b>Last Market Day!</b>\n"
+                "Your subscription expires after today's trading session.\n\n"
                 "To continue receiving high-conviction signals without interruption, choose a plan below.\n\n"
                 "👉 /subscribe"
             )

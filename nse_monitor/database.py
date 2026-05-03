@@ -18,8 +18,8 @@ class Database:
             self.lock = threading.Lock()
             # v1.3.2: Increased busy timeout for high-concurrency scalability
             self.conn.execute("PRAGMA busy_timeout = 30000")
-            # v5.2: Memory Capping (Locking cache at 2MB for Low-RAM VPS)
-            self.conn.execute("PRAGMA cache_size = -2000")
+            # v8.0: Increased cache for 2GB VPS
+            self.conn.execute("PRAGMA cache_size = -8192")
             # Test connection immediately
             self.conn.execute("SELECT 1")
             self._create_table()
@@ -188,6 +188,10 @@ class Database:
                     link_id TEXT PRIMARY KEY,
                     chat_id TEXT,
                     days INTEGER,
+                    plan_amount INTEGER DEFAULT 0,
+                    payable_amount INTEGER DEFAULT 0,
+                    discount_percent INTEGER DEFAULT 0,
+                    discount_rupees INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -244,6 +248,95 @@ class Database:
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('ai_threshold', '8')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('media_mute', '0')")
             self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_backup', '0')")
+
+            # v8.0: Referral + Free Trial config seeds
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('free_trial_enabled', '0')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('referral_reward_percent', '10')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('direct_trial_days', '0')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('referral_trial_days', '7')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_user_backup_sync_at', '0')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_referral_sync_at', '0')")
+            self.conn.execute("INSERT OR IGNORE INTO system_config (key, value) VALUES ('last_payment_sync_at', '0')")
+
+            # v8.0: Referral Links table
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_user_id TEXT NOT NULL,
+                    referral_code TEXT UNIQUE NOT NULL,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_links_owner ON referral_links(owner_user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_links_code ON referral_links(referral_code)")
+
+            # v8.0: Referral Events table
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    referrer_user_id TEXT NOT NULL,
+                    referred_user_id TEXT NOT NULL,
+                    referral_code TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    amount INTEGER DEFAULT 0,
+                    metadata_json TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_events_referrer ON referral_events(referrer_user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_events_referred ON referral_events(referred_user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_events_created ON referral_events(created_at)")
+
+            # v8.0: Referral Rewards Ledger table (immutable double-entry style)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_rewards_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    amount_rupees INTEGER NOT NULL,
+                    reason TEXT,
+                    related_user_id TEXT NULL,
+                    related_payment_link_id TEXT NULL,
+                    balance_after INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_rewards_user ON referral_rewards_ledger(user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_rewards_created ON referral_rewards_ledger(created_at)")
+
+            # v8.0: Referral Admin Actions audit table
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_admin_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_chat_id TEXT NOT NULL,
+                    target_user_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    amount_rupees INTEGER DEFAULT 0,
+                    note TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_actions_target ON referral_admin_actions(target_user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON referral_admin_actions(created_at)")
+
+            # v8.0: Supabase Sync Outbox (async mirror queue)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS supabase_sync_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    sync_status TEXT DEFAULT 'pending',
+                    retry_count INTEGER DEFAULT 0,
+                    last_error TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON supabase_sync_outbox(sync_status)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_outbox_entity ON supabase_sync_outbox(entity_type, entity_id)")
+
             
 
             # v1.3.2: Auto-Migration for Zero-Loss Queue (Self-Healing)
@@ -299,7 +392,7 @@ class Database:
         # Table: users
         cursor.execute("PRAGMA table_info(users)")
         user_cols = [row[1] for row in cursor.fetchall()]
-        
+
         # v1.3.1: Professional Marketing Columns
         for col, col_type in [
             ("working_days_left", "INTEGER DEFAULT 0"),
@@ -313,6 +406,47 @@ class Database:
                         logger.info(f"Migration: Added {col} to users table.")
                 except Exception as e:
                     logger.error(f"Migration failed (users.{col}): {e}")
+
+        # v8.0: Referral + payment tracking columns
+        for col, col_type in [
+            ("referral_code", "TEXT"),
+            ("referred_by_code", "TEXT"),
+            ("referred_by_user_id", "TEXT"),
+            ("trial_days_granted", "INTEGER DEFAULT 0"),
+            ("first_paid_at", "TIMESTAMP"),
+            ("total_paid_amount", "INTEGER DEFAULT 0"),
+        ]:
+            if col not in user_cols:
+                try:
+                    with self.conn:
+                        self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+                        logger.info(f"Migration: Added {col} to users table.")
+                except Exception as e:
+                    logger.error(f"Migration failed (users.{col}): {e}")
+
+        # v8.0: Indexes for referral lookups
+        with self.conn:
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by_user_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active)")
+
+        # Table: payment_links (additive metadata for admin-controlled plan discount)
+        cursor.execute("PRAGMA table_info(payment_links)")
+        pay_cols = [row[1] for row in cursor.fetchall()]
+        for col, col_type in [
+            ("plan_amount", "INTEGER DEFAULT 0"),
+            ("payable_amount", "INTEGER DEFAULT 0"),
+            ("discount_percent", "INTEGER DEFAULT 0"),
+            ("discount_rupees", "INTEGER DEFAULT 0"),
+        ]:
+            if col not in pay_cols:
+                try:
+                    with self.conn:
+                        self.conn.execute(f"ALTER TABLE payment_links ADD COLUMN {col} {col_type}")
+                        logger.info(f"Migration: Added {col} to payment_links.")
+                except Exception as e:
+                    logger.error(f"Migration failed (payment_links.{col}): {e}")
+
 
     def get_alert_count_last_hour(self):
         """Returns the number of alerts sent in the last 60 minutes."""
@@ -637,21 +771,50 @@ class Database:
                 (news_id,)
             )
 
-    def save_user(self, chat_id, first_name, username, source='direct'):
-        """Saves a user and credits a 2-day free trial for first-time registrations (v1.3.1)."""
+    def save_user(self, chat_id, first_name, username, source='direct', referral_code: str = None, referred_by_user_id: str = None):
+        """Saves a user and credits trial (if toggle ON). Handles referral attribution (v8.0)."""
         with self.conn:
             # Check if user already exists
             cursor = self.conn.cursor()
-            cursor.execute("SELECT id, is_trial_used FROM users WHERE id = ?", (str(chat_id),))
+            cursor.execute("SELECT id FROM users WHERE id = ?", (str(chat_id),))
             user = cursor.fetchone()
             
             if not user:
-                # New user: Give 2 free market days
-                logger.info(f"ðŸ†• NEW USER REGISTERED: {first_name} ({chat_id}) | Source: {source} | Credited 2-day trial.")
+                # New user: Check free-trial toggle
+                trial_enabled = int(self.get_config("free_trial_enabled", "0"))
+                trial_days_to_grant = int(self.get_config("referral_trial_days", "7")) if referral_code else int(self.get_config("direct_trial_days", "0"))
+                working_days = trial_days_to_grant if trial_enabled else 0
+                is_active = 1 if working_days > 0 else 0
+                
+                logger.info(f"🆕 NEW USER REGISTERED: {first_name} ({chat_id}) | Source: {source} | Trial: {working_days} days")
+                
                 self.conn.execute("""
-                    INSERT INTO users (id, first_name, username, working_days_left, is_trial_used, is_active, source_tag)
-                    VALUES (?, ?, ?, 2, 1, 1, ?)
-                """, (str(chat_id), first_name, username, source))
+                    INSERT INTO users (id, first_name, username, working_days_left, is_active, source_tag, 
+                                       referred_by_code, referred_by_user_id, trial_days_granted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (str(chat_id), first_name, username, working_days, is_active, source, referral_code, str(referred_by_user_id) if referred_by_user_id else None, working_days))
+                
+                # Generate and assign referral code for new user
+                self.create_referral_code(str(chat_id))
+                
+                # Record referral event if applicable
+                if referral_code and referred_by_user_id:
+                    self.save_referral_event(
+                        referrer_user_id=str(referred_by_user_id),
+                        referred_user_id=str(chat_id),
+                        referral_code=referral_code,
+                        event_type="signup"
+                    )
+                
+                # Sync to Supabase outbox
+                self.add_sync_outbox_row("users", str(chat_id), {
+                    "id": str(chat_id),
+                    "first_name": first_name,
+                    "username": username,
+                    "source_tag": source,
+                    "trial_days_granted": working_days
+                })
+                
                 return True # New registration
             return False
 
@@ -750,6 +913,10 @@ class Database:
                 SET first_name = ?, username = ? 
                 WHERE id = ?
             """, (first_name, username, str(chat_id)))
+            # v8.0: Sync to Outbox on update
+            self.add_sync_outbox_row("users", chat_id, {
+                "id": str(chat_id), "first_name": first_name, "username": username
+            })
 
     def reset_user_days(self, chat_id):
         """Sets a user's working days to 0 and deactivates them (Rule #24)."""
@@ -993,19 +1160,43 @@ class Database:
         cursor.execute("SELECT id FROM users")
         return [row[0] for row in cursor.fetchall()]
 
-    def save_payment_link(self, link_id, chat_id, days):
+    def save_payment_link(self, link_id, chat_id, days, plan_amount=0, payable_amount=0,
+                          discount_percent=0, discount_rupees=0):
         """Stores a new payment link for background polling (Rule #24)."""
         with self.conn:
             self.conn.execute(
-                "INSERT INTO payment_links (link_id, chat_id, days, status) VALUES (?, ?, ?, 'pending')",
-                (link_id, str(chat_id), days)
+                """INSERT INTO payment_links
+                   (link_id, chat_id, days, plan_amount, payable_amount, discount_percent, discount_rupees, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                (link_id, str(chat_id), days, int(plan_amount or 0), int(payable_amount or 0), int(discount_percent or 0), int(discount_rupees or 0))
             )
 
     def get_pending_payment_links(self):
         """Fetches all links that haven't been confirmed as paid yet."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT link_id, chat_id, days FROM payment_links WHERE status = 'pending'")
+        cursor.execute(
+            """SELECT link_id, chat_id, days, plan_amount, payable_amount, discount_percent, discount_rupees
+               FROM payment_links WHERE status = 'pending'"""
+        )
         return cursor.fetchall()
+
+    def get_payment_link_meta(self, link_id):
+        """Returns payment metadata for a link: plan, payable and discount fields."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT plan_amount, payable_amount, discount_percent, discount_rupees
+               FROM payment_links WHERE link_id = ?""",
+            (str(link_id),)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {"plan_amount": 0, "payable_amount": 0, "discount_percent": 0, "discount_rupees": 0}
+        return {
+            "plan_amount": int(row[0] or 0),
+            "payable_amount": int(row[1] or 0),
+            "discount_percent": int(row[2] or 0),
+            "discount_rupees": int(row[3] or 0),
+        }
 
     def update_payment_link_status(self, link_id, status):
         """Updates the status of a payment link (e.g., 'paid', 'expired')."""
@@ -1108,3 +1299,460 @@ class Database:
             }
             for r in rows
         ]
+
+    # ── v8.0: Free Trial Toggle ────────────────────────────────────────────────
+
+    def is_free_trial_enabled(self):
+        """Returns True if the admin-panel free-trial toggle is ON."""
+        return self.get_config("free_trial_enabled", "0") == "1"
+
+    def set_free_trial_enabled(self, enabled: bool, admin_chat_id: str = "system"):
+        """Flips the free-trial toggle and writes an audit row."""
+        value = "1" if enabled else "0"
+        self.set_config("free_trial_enabled", value)
+        label = "ON" if enabled else "OFF"
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO referral_admin_actions
+                   (admin_chat_id, target_user_id, action_type, amount_rupees, note)
+                   VALUES (?, 'SYSTEM', 'free_trial_toggle', 0, ?)""",
+                (str(admin_chat_id), f"Free trial toggled {label}")
+            )
+        logger.info(f"Free trial toggle set to {label} by admin {admin_chat_id}")
+
+    def get_direct_trial_days(self):
+        """Returns configured trial days for direct (non-referred) users."""
+        return int(self.get_config("direct_trial_days", "0"))
+
+    def get_referral_trial_days(self):
+        """Returns configured trial days for referred users."""
+        return int(self.get_config("referral_trial_days", "7"))
+
+    # ── v8.0: Referral Code Management ────────────────────────────────────────
+
+    def create_referral_code(self, user_id: str) -> str:
+        """Generates and stores a unique referral code for a user. Returns the code."""
+        # Phase 3: Format RB + last 5 digits of ID
+        suffix = str(user_id)[-5:]
+        code = f"RB{suffix}"
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE users SET referral_code = ? WHERE id = ? AND referral_code IS NULL",
+                    (code, str(user_id))
+                )
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO referral_links (owner_user_id, referral_code) VALUES (?, ?)",
+                    (str(user_id), code)
+                )
+            logger.info(f"Referral code created: {code} for user {user_id}")
+        except Exception as e:
+            logger.error(f"create_referral_code failed for {user_id}: {e}")
+        return code
+
+    def get_referral_code(self, user_id: str):
+        """Returns user's referral_code, creating one if missing."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT referral_code FROM users WHERE id = ?", (str(user_id),))
+        row = cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+        return self.create_referral_code(user_id)
+
+    def get_user_id_by_referral_code(self, code: str):
+        """Looks up the owner user_id for a referral code. Returns None if not found."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT owner_user_id FROM referral_links WHERE referral_code = ? AND is_active = 1",
+            (code.upper(),)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_referral_attribution(self, user_id: str, referral_code: str, referrer_user_id: str):
+        """Saves referral attribution on a user row (first-touch, never overwritten)."""
+        if str(user_id) == str(referrer_user_id):
+            return
+        with self.conn:
+            self.conn.execute(
+                """UPDATE users
+                   SET referred_by_code = ?, referred_by_user_id = ?
+                   WHERE id = ? AND referred_by_code IS NULL""",
+                (referral_code, str(referrer_user_id), str(user_id))
+            )
+
+    # ── v8.0: Referral Events ─────────────────────────────────────────────────
+
+    def save_referral_event(self, referrer_user_id: str, referred_user_id: str,
+                            referral_code: str, event_type: str,
+                            amount: int = 0, metadata: dict = None):
+        """Inserts a referral event row. event_type: signup|trial_started|converted|reward_credited|reward_redeemed|trial_skipped|invalid_referral"""
+        import json
+        meta_str = json.dumps(metadata) if metadata else None
+        try:
+            with self.conn:
+                self.conn.execute(
+                    """INSERT INTO referral_events
+                       (referrer_user_id, referred_user_id, referral_code, event_type, amount, metadata_json)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (str(referrer_user_id), str(referred_user_id), referral_code, event_type, amount, meta_str)
+                )
+                # v8.0: Sync to Outbox
+                self.add_sync_outbox_row("referral_events", f"{referrer_user_id}_{referred_user_id}_{int(time.time())}", {
+                    "referrer_user_id": str(referrer_user_id),
+                    "referred_user_id": str(referred_user_id),
+                    "referral_code": referral_code,
+                    "event_type": event_type,
+                    "amount": amount
+                })
+        except Exception as e:
+            logger.error(f"save_referral_event failed ({event_type}): {e}")
+
+    def get_referral_stats(self, referrer_user_id: str) -> dict:
+        """Returns referral metrics for a user: joins, conversions, reward_balance."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM referral_events WHERE referrer_user_id = ? AND event_type = 'signup'",
+            (str(referrer_user_id),)
+        )
+        joins = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM referral_events WHERE referrer_user_id = ? AND event_type = 'converted'",
+            (str(referrer_user_id),)
+        )
+        conversions = cursor.fetchone()[0]
+
+        balance = self.get_reward_balance(referrer_user_id)
+        return {"joins": joins, "conversions": conversions, "reward_balance": balance}
+
+    def get_referred_users(self, referrer_user_id: str):
+        """Returns list of (user_id, first_name, is_active, total_paid_amount) referred by this user."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT u.id, u.first_name, u.is_active, u.total_paid_amount, u.registered_at
+               FROM users u
+               WHERE u.referred_by_user_id = ?
+               ORDER BY u.registered_at DESC""",
+            (str(referrer_user_id),)
+        )
+        return cursor.fetchall()
+
+    def get_all_referred_users(self, limit=50, offset=0):
+        """Admin view: all users who were referred (have a referred_by_code)."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT id, first_name, username, is_active, working_days_left,
+                      referred_by_code, total_paid_amount, registered_at
+               FROM users WHERE referred_by_code IS NOT NULL
+               ORDER BY registered_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset)
+        )
+        return cursor.fetchall()
+
+    def get_referred_users_filtered(self, mode="all", limit=50, offset=0):
+        """Admin view: referred users with filter buckets."""
+        cursor = self.conn.cursor()
+        where = "WHERE referred_by_code IS NOT NULL"
+        params = []
+
+        if mode == "converted":
+            where += " AND total_paid_amount > 0"
+        elif mode == "non_converted":
+            where += " AND total_paid_amount <= 0"
+        elif mode == "pending_trial":
+            where += " AND is_active = 1 AND working_days_left BETWEEN 1 AND 2"
+
+        query = f"""SELECT id, first_name, username, is_active, working_days_left,
+                           referred_by_code, total_paid_amount, registered_at
+                    FROM users
+                    {where}
+                    ORDER BY registered_at DESC LIMIT ? OFFSET ?"""
+        params.extend([limit, offset])
+        cursor.execute(query, tuple(params))
+        return cursor.fetchall()
+
+    def get_referrer_leaderboard(self, limit=20):
+        """Admin view: top referrers by total conversions."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT referrer_user_id,
+                      COUNT(CASE WHEN event_type='signup' THEN 1 END) as joins,
+                      COUNT(CASE WHEN event_type='converted' THEN 1 END) as conversions,
+                      SUM(CASE WHEN event_type='converted' THEN amount ELSE 0 END) as paid_amount
+               FROM referral_events
+               GROUP BY referrer_user_id
+               ORDER BY conversions DESC, joins DESC
+               LIMIT ?""",
+            (limit,)
+        )
+        return cursor.fetchall()
+
+    # ── v8.0: Reward Ledger ───────────────────────────────────────────────────
+
+    def get_reward_balance(self, user_id: str) -> int:
+        """Returns current reward wallet balance (rupees) for a user."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT balance_after FROM referral_rewards_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (str(user_id),)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
+    def add_reward_ledger_entry(self, user_id: str, entry_type: str, amount_rupees: int,
+                                reason: str = "", related_user_id: str = None,
+                                related_payment_link_id: str = None) -> int:
+        """Appends an immutable ledger entry. Returns new balance. entry_type: credit|debit|expire|adjust"""
+        current = self.get_reward_balance(user_id)
+        if entry_type == "debit":
+            new_balance = max(0, current - amount_rupees)
+            actual_debit = current - new_balance
+        elif entry_type == "credit":
+            new_balance = current + amount_rupees
+            actual_debit = amount_rupees
+        else:
+            new_balance = max(0, current + amount_rupees)
+            actual_debit = amount_rupees
+
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO referral_rewards_ledger
+                   (user_id, entry_type, amount_rupees, reason, related_user_id, related_payment_link_id, balance_after)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (str(user_id), entry_type, actual_debit, reason, related_user_id, related_payment_link_id, new_balance)
+            )
+        logger.info(f"Reward ledger: {entry_type} ₹{actual_debit} for {user_id} → balance ₹{new_balance}")
+        return new_balance
+
+    def log_referral_admin_action(self, admin_chat_id: str, target_user_id: str,
+                                  action_type: str, amount_rupees: int = 0, note: str = ""):
+        """Writes an audit row for every admin referral action."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO referral_admin_actions
+                   (admin_chat_id, target_user_id, action_type, amount_rupees, note)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (str(admin_chat_id), str(target_user_id), action_type, amount_rupees, note)
+            )
+
+    def get_user_discount_percent(self, user_id: str) -> int:
+        """Returns admin-approved one-time discount percent for next plan purchase."""
+        key = f"user_discount_percent_{str(user_id)}"
+        try:
+            pct = int(self.get_config(key, "0") or "0")
+        except Exception:
+            pct = 0
+        return max(0, min(95, pct))
+
+    def set_user_discount_percent(self, user_id: str, percent: int, admin_chat_id: str = "system"):
+        """Sets one-time discount percent for a user (consumed on successful payment)."""
+        pct = max(0, min(95, int(percent or 0)))
+        key = f"user_discount_percent_{str(user_id)}"
+        self.set_config(key, str(pct))
+        action = "discount_approved" if pct > 0 else "discount_rejected"
+        note = f"One-time plan discount set to {pct}%"
+        self.log_referral_admin_action(admin_chat_id, user_id, action_type=action, amount_rupees=0, note=note)
+
+    def clear_user_discount_percent(self, user_id: str):
+        """Clears user one-time discount after successful payment settlement."""
+        key = f"user_discount_percent_{str(user_id)}"
+        self.set_config(key, "0")
+
+    # ── v8.0: Payment Attribution ─────────────────────────────────────────────
+
+    def record_first_payment(self, user_id: str, amount: int, link_id: str = None):
+        """Sets first_paid_at (once only) and accumulates total_paid_amount. Returns True if first payment."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT first_paid_at, total_paid_amount FROM users WHERE id = ?", (str(user_id),))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        is_first = row[0] is None
+        with self.conn:
+            if is_first:
+                self.conn.execute(
+                    "UPDATE users SET first_paid_at = CURRENT_TIMESTAMP, total_paid_amount = total_paid_amount + ? WHERE id = ?",
+                    (amount, str(user_id))
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE users SET total_paid_amount = total_paid_amount + ? WHERE id = ?",
+                    (amount, str(user_id))
+                )
+
+        # Mirror subscription event to Supabase outbox (non-blocking)
+        event_id = f"sub_{str(link_id or int(time.time()))}_{str(user_id)}"
+        self.add_sync_outbox_row("subscription_events", event_id, {
+            "id": event_id,
+            "user_id": str(user_id),
+            "plan_amount": int(amount),
+            "payment_status": "paid",
+            "created_at": datetime.now(pytz.timezone('Asia/Kolkata')).isoformat()
+        })
+        return is_first
+
+    def credit_referral_reward_on_conversion(self, referred_user_id: str, amount_paid: int, link_id: str = None):
+        """Credits referrer's reward wallet (10% of first paid amount) if referral exists."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT referred_by_user_id FROM users WHERE id = ?", (str(referred_user_id),))
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return
+        referrer_id = row[0]
+        reward_pct = int(self.get_config("referral_reward_percent", "10"))
+        reward = max(1, (amount_paid * reward_pct) // 100)
+
+        # v8.0: Log "converted" event first (payment confirmed)
+        self.save_referral_event(
+            referrer_user_id=referrer_id,
+            referred_user_id=referred_user_id,
+            referral_code=self.get_referral_code(referrer_id),
+            event_type="converted",
+            amount=amount_paid
+        )
+
+        # Then log reward credit
+        self.add_reward_ledger_entry(
+            referrer_id, "credit", reward,
+            reason=f"Referral conversion: user {referred_user_id} paid ₹{amount_paid}",
+            related_user_id=referred_user_id,
+            related_payment_link_id=link_id
+        )
+        self.save_referral_event(
+            referrer_user_id=referrer_id,
+            referred_user_id=referred_user_id,
+            referral_code=self.get_referral_code(referrer_id),
+            event_type="reward_credited",
+            amount=reward
+        )
+
+        # Mirror conversion event to Supabase outbox (for marketing/analytics read model)
+        conv_id = f"conv_{str(referred_user_id)}_{int(time.time())}"
+        self.add_sync_outbox_row("conversion_events", conv_id, {
+            "id": conv_id,
+            "referrer_user_id": str(referrer_id),
+            "referred_user_id": str(referred_user_id),
+            "paid_amount": int(amount_paid),
+            "created_at": datetime.now(pytz.timezone('Asia/Kolkata')).isoformat()
+        })
+
+    # ── v8.0: Supabase Sync Outbox ────────────────────────────────────────────
+
+    def add_sync_outbox_row(self, entity_type: str, entity_id: str, payload: dict):
+        """Queues a row for async Supabase sync."""
+        import json
+        try:
+            with self.conn:
+                self.conn.execute(
+                    """INSERT INTO supabase_sync_outbox
+                       (entity_type, entity_id, payload_json, sync_status)
+                       VALUES (?, ?, ?, 'pending')""",
+                    (entity_type, str(entity_id), json.dumps(payload))
+                )
+        except Exception as e:
+            logger.error(f"add_sync_outbox_row failed ({entity_type}/{entity_id}): {e}")
+
+    def get_pending_sync_rows(self, limit=50, apply_backoff=False):
+        """Returns pending outbox rows for the sync bridge to process."""
+        cursor = self.conn.cursor()
+        if apply_backoff:
+            cursor.execute(
+                """SELECT id, entity_type, entity_id, payload_json, retry_count
+                   FROM supabase_sync_outbox
+                   WHERE (
+                        sync_status = 'pending'
+                        OR (
+                            sync_status = 'failed'
+                            AND retry_count < 10
+                            AND datetime(updated_at, '+' ||
+                                CASE
+                                    WHEN retry_count <= 1 THEN 1
+                                    WHEN retry_count = 2 THEN 2
+                                    WHEN retry_count = 3 THEN 4
+                                    WHEN retry_count = 4 THEN 8
+                                    ELSE 15
+                                END
+                            || ' minutes') <= CURRENT_TIMESTAMP
+                        )
+                   )
+                   ORDER BY id ASC LIMIT ?""",
+                (limit,)
+            )
+        else:
+            cursor.execute(
+                """SELECT id, entity_type, entity_id, payload_json, retry_count
+                   FROM supabase_sync_outbox
+                   WHERE sync_status IN ('pending', 'failed') AND retry_count < 10
+                   ORDER BY id ASC LIMIT ?""",
+                (limit,)
+            )
+        rows = cursor.fetchall()
+        return [
+            {"id": r[0], "entity_type": r[1], "entity_id": r[2],
+             "payload_json": r[3], "retry_count": r[4]}
+            for r in rows
+        ]
+
+    def mark_sync_row_done(self, row_id: int):
+        """Marks an outbox row as successfully synced."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE supabase_sync_outbox SET sync_status='synced', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (row_id,)
+            )
+
+    def mark_sync_row_failed(self, row_id: int, error: str):
+        """Increments retry count and stores last error for a failed outbox row."""
+        with self.conn:
+            self.conn.execute(
+                """UPDATE supabase_sync_outbox
+                   SET sync_status='failed', retry_count=retry_count+1,
+                       last_error=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (str(error)[:500], row_id)
+            )
+
+    def get_users_for_supabase_mirror(self, since_ts: float = 0, limit: int = 200):
+        """Returns user rows modified after since_ts for Supabase user-list backup."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT id, first_name, username, is_active, working_days_left,
+                      referral_code, referred_by_code, trial_days_granted,
+                      total_paid_amount, registered_at
+               FROM users
+               WHERE strftime('%s', registered_at) > ?
+               ORDER BY registered_at ASC LIMIT ?""",
+            (str(int(since_ts)), limit)
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "user_id": r[0], "first_name": r[1], "username": r[2],
+                "is_active": r[3], "working_days_left": r[4],
+                "referral_code": r[5], "referred_by_code": r[6],
+                "trial_days_granted": r[7], "total_paid_amount": r[8],
+                "registered_at": r[9]
+            }
+            for r in rows
+        ]
+
+    def backfill_supabase_outbox(self):
+        """Phase 14: Queues all existing users into the Supabase sync outbox."""
+        with self.lock:
+            cursor = self.conn.execute("SELECT id, first_name, username, is_active, referral_code FROM users")
+            users = cursor.fetchall()
+            count = 0
+            for u in users:
+                uid, name, uname, active, ref_code = u
+                payload = {
+                    "id": str(uid),
+                    "first_name": name,
+                    "username": uname,
+                    "is_active": active,
+                    "referral_code": ref_code
+                }
+                self.add_sync_outbox_row("users", uid, payload)
+                count += 1
+            return count
+

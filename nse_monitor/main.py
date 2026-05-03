@@ -4,6 +4,7 @@ import hashlib
 import logging
 import logging.handlers
 import os
+import random
 import signal
 import sys
 import time
@@ -34,8 +35,8 @@ from nse_monitor.pdf_processor import PDFProcessor
 from nse_monitor.report_builder import ReportBuilder
 from nse_monitor.scheduler import MarketScheduler
 # from nse_monitor.sources.bulk_deal_source import BulkDealSource
-from nse_monitor.sources.economic_times_source import EconomicTimesSource
-from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
+# from nse_monitor.sources.economic_times_source import EconomicTimesSource
+# from nse_monitor.sources.moneycontrol_source import MoneycontrolSource
 from nse_monitor.sources.nse_sme_source import NseSmeSource
 from nse_monitor.sources.nse_source import NSESource
 from nse_monitor.telegram_bot import TelegramBot
@@ -149,9 +150,9 @@ class MarketIntelligenceSystem:
         self.sources = [
             NSESource(client=self.nse_client),
             NseSmeSource(client=self.nse_client),
-            EconomicTimesSource(),
-            MoneycontrolSource(),
-            # BulkDealSource(nse_client=self.nse_client), # Permanently disabled per institutional audit
+            # EconomicTimesSource(),   # Disabled — re-enable when needed
+            # MoneycontrolSource(),    # Disabled — re-enable when needed
+            # BulkDealSource(nse_client=self.nse_client),
         ]
 
         self.memory_lock = asyncio.Lock()
@@ -255,14 +256,30 @@ class MarketIntelligenceSystem:
         if not pending:
             return
         from nse_monitor.payment_processor import RazorpayProcessor
+        from nse_monitor.config import SUBSCRIPTION_PLANS
 
         rp = RazorpayProcessor()
         loop = asyncio.get_running_loop()
-        for pl_id, chat_id, _days in pending:
+        for row in pending:
+            pl_id, chat_id, _days = row[0], row[1], row[2]
+            plan_amount = int(row[3] or 0) if len(row) > 3 else 0
+            payable_amount = int(row[4] or 0) if len(row) > 4 else 0
+            discount_percent = int(row[5] or 0) if len(row) > 5 else 0
             days_added = await loop.run_in_executor(None, lambda id=pl_id: rp.verify_payment_status(id))
             if days_added:
                 self.db.add_working_days(chat_id, days_added)
                 self.db.update_payment_link_status(pl_id, "processed")
+
+                # v8.0: Payment attribution + referral reward credit
+                fallback_amount = next((int(k) for k, p in SUBSCRIPTION_PLANS.items() if p["days"] == days_added), 0)
+                amount_paid = payable_amount or plan_amount or fallback_amount
+                if amount_paid > 0:
+                    self.db.record_first_payment(chat_id, amount_paid, pl_id)
+                    self.db.credit_referral_reward_on_conversion(chat_id, amount_paid, pl_id)
+
+                if discount_percent > 0:
+                    self.db.clear_user_discount_percent(chat_id)
+
                 send_result = self.bot._send_raw(chat_id, f"Payment success. {days_added} market days added.")
                 if inspect.isawaitable(send_result):
                     await send_result
@@ -398,23 +415,28 @@ class MarketIntelligenceSystem:
         media_status = "MUTED (Official Only)" if media_mute == "1" else "ACTIVE"
         logger.info(">>> Intelligence Cycle Started | Threshold=%s | Media=%s", current_thresh, media_status)
 
-        active_sources = [
-            s for s in self.sources 
-            if not isinstance(s, (EconomicTimesSource, MoneycontrolSource)) or media_mute == "0"
-        ]
+        active_sources = list(self.sources)
 
-        tasks = [source.fetch() for source in active_sources]
-        source_results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Stagger NSE sources to avoid simultaneous requests to the same IP
+        # NSE + NSE_SME fire together = ban risk. Add small jitter between them.
+        source_results = []
+        for i, source in enumerate(active_sources):
+            if i > 0:
+                await asyncio.sleep(random.uniform(1.5, 3.0))
+            try:
+                result = await source.fetch()
+                source_results.append(result)
+            except Exception as e:
+                logger.error("Source %s failed: %s", source.NAME if hasattr(source, 'NAME') else i, e)
+                source_results.append([])
 
         raw_items = []
         fetched_count = 0
-        for i, items in enumerate(source_results):
-            if isinstance(items, Exception):
-                logger.error("Source %s failed: %s", i, items)
+        for items in source_results:
+            if not items:
                 continue
-            if items:
-                raw_items.extend(items)
-                fetched_count += len(items)
+            raw_items.extend(items)
+            fetched_count += len(items)
 
         if fetched_count == 0 and self.is_market_hours():
             logger.warning("Pipeline alert: zero news items fetched globally.")

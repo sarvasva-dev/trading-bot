@@ -35,8 +35,8 @@ def _cleanup_admin_pid(pid_file):
     try:
         if os.path.exists(pid_file):
             os.remove(pid_file)
-    except Exception:
-        pass
+    except OSError as e:
+        logger.warning("PID cleanup failed: %s", e)
 
 
 def ensure_single_admin_instance():
@@ -262,8 +262,60 @@ class AdminPanel:
             new_val = "1" if current == "0" else "0"
             self.db.set_config("media_mute", new_val)
             await self._answer_callback(cb["id"], f"OK. Media Mute: {'ON' if new_val == '1' else 'OFF'}")
-            # v6.7: Immediate State Override
             await self._show_config_menu(chat_id, edit_message_id=cb["message"]["message_id"], override_mute=new_val)
+
+        # v8.0: Free Trial Toggle
+        elif data == "toggle_free_trial":
+            current_trial = self.db.is_free_trial_enabled()
+            new_trial = not current_trial
+            self.db.set_free_trial_enabled(new_trial, admin_chat_id=from_id)
+            label = "ON" if new_trial else "OFF"
+            await self._answer_callback(cb["id"], f"Free Trial toggled {label}. Affects new users only.", show_alert=True)
+            await self._send_main_menu(chat_id)
+
+        # v8.0: Referral System menu
+        elif data == "menu_referral":
+            await self._show_referral_menu(chat_id)
+        elif data == "ref_list_referred":
+            await self._show_referred_users(chat_id, mode="all", offset=0)
+        elif data == "ref_list_converted":
+            await self._show_referred_users(chat_id, mode="converted", offset=0)
+        elif data == "ref_list_nonconverted":
+            await self._show_referred_users(chat_id, mode="non_converted", offset=0)
+        elif data == "ref_list_pendingtrial":
+            await self._show_referred_users(chat_id, mode="pending_trial", offset=0)
+        elif data == "ref_leaderboard":
+            await self._show_referrer_leaderboard(chat_id)
+        elif data.startswith("ref_page_"):
+            payload = data[len("ref_page_"):]
+            mode, page_str = payload.rsplit("_", 1)
+            page = int(page_str)
+            await self._show_referred_users(chat_id, mode=mode, offset=page * 10)
+        elif data.startswith("ref_user_"):
+            uid = data.split("ref_user_")[1]
+            await self._show_referral_user_detail(chat_id, uid)
+        elif data.startswith("ref_payout_"):
+            uid = data.split("ref_payout_")[1]
+            await self._execute_referral_payout(chat_id, from_id, uid)
+        elif data.startswith("ref_discount_"):
+            uid = data.split("ref_discount_")[1]
+            await self._execute_referral_discount(chat_id, from_id, uid)
+        elif data.startswith("ref_setpct_"):
+            uid = data.split("ref_setpct_")[1]
+            await self._show_referral_discount_options(chat_id, uid)
+        elif data.startswith("ref_pct_"):
+            _, _, uid, pct = data.split("_", 3)
+            await self._execute_set_discount_percent(chat_id, from_id, uid, pct)
+        elif data.startswith("ref_reject_"):
+            uid = data.split("ref_reject_")[1]
+            await self._execute_reject_discount(chat_id, from_id, uid)
+        elif data.startswith("ref_adjust_"):
+            uid = data.split("ref_adjust_")[1]
+            await self._show_manual_adjust_options(chat_id, uid)
+        elif data.startswith("ref_adjval_"):
+            _, _, uid, amt = data.split("_", 3)
+            await self._execute_manual_adjust(chat_id, from_id, uid, amt)
+
         elif data.startswith("list_page_"):
             page = int(data.split("_")[2])
             offset = page * 10
@@ -298,8 +350,7 @@ class AdminPanel:
             await self._send_main_menu(chat_id)
         elif data == "action_vacuum":
             try:
-                # Synchronous operation wrapped in executor
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, lambda: self.db.conn.execute("VACUUM"))
                 await self._answer_callback(cb["id"], "OK. Database vacuum complete.", show_alert=True)
             except Exception as e:
@@ -310,10 +361,15 @@ class AdminPanel:
                 await self._answer_callback(cb["id"], f"OK. Purge complete: {deleted} items removed.", show_alert=True)
             except Exception as e:
                 await self._answer_callback(cb["id"], f"Purge failed: {e}", show_alert=True)
+        elif data == "action_sync_supabase":
+            try:
+                count = self.db.backfill_supabase_outbox()
+                await self._answer_callback(cb["id"], f"OK. {count} users queued for Supabase sync.", show_alert=True)
+            except Exception as e:
+                await self._answer_callback(cb["id"], f"Sync failed: {e}", show_alert=True)
         elif data == "action_sync_holidays":
             from nse_monitor.trading_calendar import TradingCalendar
-            # Sync is synchronous requests, wrapping for UI responsiveness
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             success = await loop.run_in_executor(None, TradingCalendar.sync_from_nse)
             if success:
                 await self._answer_callback(cb["id"], "OK. NSE holidays synced.", show_alert=True)
@@ -323,6 +379,8 @@ class AdminPanel:
         await self._answer_callback(cb["id"])
 
     async def _send_main_menu(self, chat_id):
+        trial_on = self.db.is_free_trial_enabled()
+        trial_label = "Free Trial: ON" if trial_on else "Free Trial: OFF"
         text = (
             f"<b>{BOT_NAME} INTELLIGENCE GATEWAY (v12.0)</b>\n"
             f"------------------------------\n"
@@ -332,36 +390,41 @@ class AdminPanel:
             f"- <code>/grant &lt;id&gt; &lt;days&gt;</code> : Manual Credit\n"
             f"- <code>/broadcast &lt;msg&gt;</code> : Global Signal\n"
             f"- <code>/status</code> : System Health\n\n"
+            f"<b>Free Trial:</b> {'<b>ON</b> (new users get trial days)' if trial_on else '<b>OFF</b> (no trial for new users)'}\n"
             f"Select an action below:"
         )
         keyboard = {
             "inline_keyboard": [
                 [{"text": "System Status", "callback_data": "menu_status"}, {"text": "Bot Config", "callback_data": "menu_config"}],
                 [{"text": "User Audit", "callback_data": "menu_list"}, {"text": "Global Audit", "callback_data": "menu_hisab"}],
-                [{"text": "Send Signal", "callback_data": "menu_broadcast"}, {"text": "DB Rescue", "callback_data": "menu_rescue"}]
+                [{"text": "Send Signal", "callback_data": "menu_broadcast"}, {"text": "DB Rescue", "callback_data": "menu_rescue"}],
+                [{"text": trial_label, "callback_data": "toggle_free_trial"}, {"text": "Referral System", "callback_data": "menu_referral"}]
             ]
         }
         await self._send(chat_id, text, keyboard)
 
-    async def _show_config_menu(self, chat_id, edit_message_id=None, override_threshold=None, override_mute=None):
+    async def _show_config_menu(self, chat_id, edit_message_id=None, override_threshold=None, override_mute=None, override_trial=None):
         # v7.1: State Synthesis (Priority: Override > DB > Default)
         thresh = override_threshold or self.db.get_config("ai_threshold", "8")
         if thresh not in ALLOWED_AI_THRESHOLDS:
             thresh = "8"
         mute = override_mute or self.db.get_config("media_mute", "0")
-        
+        trial_on = (override_trial is not None and override_trial) or (override_trial is None and self.db.is_free_trial_enabled())
+
         mute_label = "UNMUTE Media" if mute == "1" else "MUTE Media"
+        trial_label = "Free Trial: ON  [toggle OFF]" if trial_on else "Free Trial: OFF [toggle ON]"
         ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')
-        sync_icon = "🛡️" if thresh == "8" else ("✅" if (override_threshold or override_mute) else "📡")
-        
+        sync_icon = "S" if thresh == "8" else ("OK" if (override_threshold or override_mute) else "~")
+
         text = (
-            f"<b>{BOT_NAME} | LIVE CONFIG (v7.0)</b>\n"
+            f"<b>{BOT_NAME} | LIVE CONFIG (v8.0)</b>\n"
             f"------------------------------\n"
-            f"<b>Current Threshold:</b> {thresh}/10 {sync_icon}\n"
-            f"<b>Media Source:</b> {'MUTED (Official Online)' if mute == '1' else 'ACTIVE'}\n"
+            f"<b>Current Threshold:</b> {thresh}/10 [{sync_icon}]\n"
+            f"<b>Media Source:</b> {'MUTED (Official Only)' if mute == '1' else 'ACTIVE'}\n"
+            f"<b>Free Trial:</b> {'ON — new users get trial days' if trial_on else 'OFF — no trial for new users'}\n"
             f"<b>Last Updated:</b> <code>{ist_now} (IST)</code>\n"
             f"------------------------------\n"
-            f"<i>Settings apply instantly to the next engine cycle.</i>"
+            f"<i>Settings apply instantly. Free Trial affects new users only.</i>"
         )
         keyboard = {
             "inline_keyboard": [
@@ -369,6 +432,7 @@ class AdminPanel:
                 [{"text": "Threshold: 6 (Balanced)", "callback_data": "set_threshold_6"}],
                 [{"text": "Threshold: 8 (Ultra Strict)", "callback_data": "set_threshold_8"}],
                 [{"text": mute_label, "callback_data": "toggle_media_mute"}],
+                [{"text": trial_label, "callback_data": "toggle_free_trial"}],
                 [{"text": "Back to Main Menu", "callback_data": "menu_main"}]
             ]
         }
@@ -405,6 +469,7 @@ class AdminPanel:
             "inline_keyboard": [
                 [{"text": "Run DB Vacuum", "callback_data": "action_vacuum"}],
                 [{"text": "Sync NSE Holidays", "callback_data": "action_sync_holidays"}],
+                [{"text": "Force Supabase Sync", "callback_data": "action_sync_supabase"}],
                 [{"text": "Purge Old News", "callback_data": "action_purge"}],
                 [{"text": "Back", "callback_data": "menu_main"}]
             ]
@@ -429,17 +494,17 @@ class AdminPanel:
         limit = 10
         users = self.db.get_all_users(limit=limit, offset=offset)
         page = offset // limit
-        
-        text = f"<b>USER AUDIT (Page {page + 1})</b>\n------------------------------\n"
+
+        lines = [f"<b>USER AUDIT (Page {page + 1})</b>", "------------------------------"]
         keyboard = {"inline_keyboard": []}
-        
+
         for u in users:
             uid, name, uname, active, days = u
             has_username = uname and uname not in ("manual_entry", "Unknown", "Legacy", "Sync_Legacy", "None")
             uname_label = f"@{uname}" if has_username else f"...{str(uid)[-6:]}"
             display_name = name if name and name != "Sync_Legacy" else "User"
             icon = "ACTIVE" if active else "INACTIVE"
-            text += f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>\n"
+            lines.append(f"{icon} {display_name} {uname_label} [<code>{uid}</code>] | <b>{days}d</b>")
             keyboard["inline_keyboard"].append([{"text": f"Manage {uname_label}", "callback_data": f"manage_{uid}"}])
         
         nav_buttons = []
@@ -448,11 +513,13 @@ class AdminPanel:
         if len(users) == limit:
             nav_buttons.append({"text": "Next", "callback_data": f"list_page_{page + 1}"})
         
-        if nav_buttons: keyboard["inline_keyboard"].append(nav_buttons)
-        if not users: text += "<i>No more users found.</i>"
-            
-        text += "------------------------------\n<i>Click user for Manage Menu.</i>"
-        await self._send(chat_id, text, keyboard)
+        if nav_buttons:
+            keyboard["inline_keyboard"].append(nav_buttons)
+        if not users:
+            lines.append("<i>No more users found.</i>")
+        lines.append("------------------------------")
+        lines.append("<i>Click user for Manage Menu.</i>")
+        await self._send(chat_id, "\n".join(lines), keyboard)
 
     async def _show_manage_menu(self, chat_id, uid):
         user = self.db.get_user(uid)
@@ -535,12 +602,12 @@ class AdminPanel:
 
     async def _handle_users(self, chat_id):
         users = self.db.get_all_users(limit=15)
-        text = "<b>LATEST USERS</b>\n------------------------------\n"
+        lines = ["<b>LATEST USERS</b>", "------------------------------"]
         for u in users:
             uid, name, uname, active, days = u
             icon = "ACTIVE" if active else "INACTIVE"
-            text += f"{icon} {name} [<code>{uid}</code>] | {days}d\n"
-        await self._send(chat_id, text)
+            lines.append(f"{icon} {name} [<code>{uid}</code>] | {days}d")
+        await self._send(chat_id, "\n".join(lines))
 
     async def _handle_grant(self, chat_id, text):
         parts = text.split()
@@ -559,7 +626,8 @@ class AdminPanel:
         try:
             async with self.session.post(f"{self.signal_bot_url}/sendMessage", json=payload, timeout=5) as resp:
                 await resp.text()
-        except: pass
+        except Exception as e:
+            logger.warning("notify_user_via_signal_bot failed for %s: %s", user_id, e)
 
     async def _handle_broadcast(self, chat_id, text):
         full_content = text.replace("/broadcast", "").strip()
@@ -591,7 +659,8 @@ class AdminPanel:
                 await self._send(uid, final_msg, use_signal_bot=True)
                 count += 1
                 await asyncio.sleep(0.05)
-            except: pass
+            except Exception as e:
+                logger.warning("Broadcast failed for %s: %s", uid, e)
         await self._send(chat_id, f"✅ <b>Success:</b> Broadcast sent to {count} users.\n<b>Header Used:</b> {header_title}")
 
     async def _send(self, chat_id, text, keyboard=None, use_signal_bot=False, edit_message_id=None):
@@ -612,19 +681,233 @@ class AdminPanel:
 
     async def _answer_callback(self, cb_id, text=None, show_alert=False):
         payload = {"callback_query_id": cb_id}
-        if text: 
+        if text:
             payload["text"] = text
             payload["show_alert"] = show_alert
         try:
             async with self.session.post(f"{self.base_url}/answerCallbackQuery", json=payload, timeout=5) as resp:
                 await resp.text()
-        except: pass
+        except Exception as e:
+            logger.warning("answerCallbackQuery failed: %s", e)
 
     async def _delete_message(self, chat_id, message_id):
         try:
             async with self.session.post(f"{self.base_url}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5) as resp:
                 await resp.text()
-        except: pass
+        except Exception as e:
+            logger.warning("deleteMessage failed: %s", e)
+
+    async def _show_referral_menu(self, chat_id):
+        text = (
+            f"<b>{BOT_NAME} | REFERRAL SYSTEM</b>\n"
+            f"------------------------------\n"
+            f"Track and manage affiliate performance.\n"
+            f"Reward top referrers and manage payouts."
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "Referred Users List", "callback_data": "ref_list_referred"}],
+                [{"text": "Converted Users", "callback_data": "ref_list_converted"}, {"text": "Non-Converted", "callback_data": "ref_list_nonconverted"}],
+                [{"text": "Pending Trial Expiry", "callback_data": "ref_list_pendingtrial"}],
+                [{"text": "Referrer Leaderboard", "callback_data": "ref_leaderboard"}],
+                [{"text": "Back to Main Menu", "callback_data": "menu_main"}]
+            ]
+        }
+        await self._send(chat_id, text, keyboard)
+
+    async def _show_referred_users(self, chat_id, mode="all", offset=0):
+        limit = 10
+        users = self.db.get_referred_users_filtered(mode=mode, limit=limit, offset=offset)
+        page = offset // limit
+
+        mode_titles = {
+            "all": "REFERRED USERS",
+            "converted": "CONVERTED USERS",
+            "non_converted": "NON-CONVERTED USERS",
+            "pending_trial": "PENDING TRIAL EXPIRY",
+        }
+
+        lines = [f"<b>{mode_titles.get(mode, 'REFERRED USERS')} (Page {page + 1})</b>", "------------------------------"]
+        keyboard = {"inline_keyboard": []}
+
+        for u in users:
+            uid, name, uname, active, days, ref_code, total_paid, reg_at = u
+            status = "✅" if active else "❌"
+            lines.append(f"{status} {name} [<code>{uid}</code>]")
+            lines.append(f"   Code: <code>{ref_code}</code> | Paid: ₹{total_paid}")
+            keyboard["inline_keyboard"].append([{"text": f"Manage {name}", "callback_data": f"ref_user_{uid}"}])
+
+        nav_buttons = []
+        if offset > 0:
+            nav_buttons.append({"text": "Prev", "callback_data": f"ref_page_{mode}_{page - 1}"})
+        if len(users) == limit:
+            nav_buttons.append({"text": "Next", "callback_data": f"ref_page_{mode}_{page + 1}"})
+
+        if nav_buttons:
+            keyboard["inline_keyboard"].append(nav_buttons)
+        keyboard["inline_keyboard"].append([{"text": "Back to Referral Menu", "callback_data": "menu_referral"}])
+
+        if not users:
+            lines.append("<i>No referred users found.</i>")
+        await self._send(chat_id, "\n".join(lines), keyboard)
+
+    async def _show_referrer_leaderboard(self, chat_id):
+        leaders = self.db.get_referrer_leaderboard(limit=10)
+        lines = ["<b>REFERRER LEADERBOARD</b>", "------------------------------"]
+
+        if not leaders:
+            lines.append("<i>No referral activity yet.</i>")
+        else:
+            for i, (rid, joins, convs, amount) in enumerate(leaders, 1):
+                lines.append(f"{i}. <code>{rid}</code> | {joins} j | {convs} c | ₹{amount or 0}")
+
+        keyboard = {"inline_keyboard": [[{"text": "Back", "callback_data": "menu_referral"}]]}
+        await self._send(chat_id, "\n".join(lines), keyboard)
+
+    async def _show_referral_user_detail(self, chat_id, uid):
+        user = self.db.get_user(uid)
+        if not user: return
+
+        # Outgoing: this user as a referrer
+        stats = self.db.get_referral_stats(uid)
+        code = self.db.get_referral_code(uid)
+
+        # Incoming: who referred this user
+        cursor = self.db.conn.cursor()
+        cursor.execute("SELECT referred_by_code, referred_by_user_id, total_paid_amount FROM users WHERE id = ?", (str(uid),))
+        row = cursor.fetchone()
+        referred_by_code = row[0] if row else None
+        referred_by_uid = row[1] if row else None
+        total_paid = row[2] if row else 0
+
+        text = (
+            f"<b>REFERRAL DETAIL:</b> {user[1]}\n"
+            f"<b>ID:</b> <code>{uid}</code>\n"
+            f"<b>Own Code:</b> <code>{code}</code>\n"
+            f"------------------------------\n"
+            f"<b>Referred By:</b> {f'<code>{referred_by_uid}</code> (code: {referred_by_code})' if referred_by_uid else 'Direct signup'}\n"
+            f"<b>Total Paid:</b> ₹{total_paid}\n"
+            f"------------------------------\n"
+            f"<b>As Referrer:</b>\n"
+            f"  Joins: {stats['joins']} | Conversions: {stats['conversions']}\n"
+            f"  Wallet Balance: ₹{stats['reward_balance']}\n"
+            f"------------------------------\n"
+            f"Select an action:"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "Mark Payout Approved", "callback_data": f"ref_payout_{uid}"}],
+                [{"text": "Credit Discount (Manual)", "callback_data": f"ref_discount_{uid}"}],
+                [{"text": "Set Plan Discount %", "callback_data": f"ref_setpct_{uid}"}],
+                [{"text": "Manual Adjust Wallet", "callback_data": f"ref_adjust_{uid}"}],
+                [{"text": "Reject Discount", "callback_data": f"ref_reject_{uid}"}],
+                [{"text": "Back to List", "callback_data": "ref_list_referred"}]
+            ]
+        }
+        await self._send(chat_id, text, keyboard)
+
+    async def _execute_referral_payout(self, chat_id, admin_id, uid):
+        balance = self.db.get_reward_balance(uid)
+        if balance <= 0:
+            await self._send(chat_id, "❌ User has zero balance.")
+            return
+            
+        # Deduct from ledger
+        self.db.add_reward_ledger_entry(uid, "debit", balance, reason="Cash Payout Approved by Admin")
+        self.db.log_referral_admin_action(admin_id, uid, "payout_marked", amount_rupees=balance, note="Full balance payout")
+        
+        await self._send(chat_id, f"✅ <b>Payout Marked:</b> ₹{balance} for <code>{uid}</code>.")
+        await self._show_referral_user_detail(chat_id, uid)
+
+    async def _execute_referral_discount(self, chat_id, admin_id, uid):
+        balance = self.db.get_reward_balance(uid)
+        if balance <= 0:
+            await self._send(chat_id, "❌ User has zero reward balance to convert to discount.")
+            return
+        # Reward balance is already in the ledger as credit; admin confirms it's usable as discount
+        self.db.log_referral_admin_action(admin_id, uid, "discount_approved", amount_rupees=balance,
+                                          note="Discount wallet credit approved by admin")
+        await self._send(chat_id, f"✅ <b>Discount Approved:</b> ₹{balance} wallet credit confirmed for <code>{uid}</code>.\n"
+                                  f"Will be auto-deducted on next plan purchase.")
+        await self._show_referral_user_detail(chat_id, uid)
+
+    async def _show_referral_discount_options(self, chat_id, uid):
+        current = self.db.get_user_discount_percent(uid)
+        text = (
+            f"<b>SET DISCOUNT PERCENT</b>\n"
+            f"User: <code>{uid}</code>\n"
+            f"Current one-time discount: <b>{current}%</b>\n\n"
+            f"Select discount for next plan purchase:"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "5%", "callback_data": f"ref_pct_{uid}_5"},
+                    {"text": "10%", "callback_data": f"ref_pct_{uid}_10"},
+                    {"text": "15%", "callback_data": f"ref_pct_{uid}_15"}
+                ],
+                [
+                    {"text": "20%", "callback_data": f"ref_pct_{uid}_20"},
+                    {"text": "25%", "callback_data": f"ref_pct_{uid}_25"},
+                    {"text": "30%", "callback_data": f"ref_pct_{uid}_30"}
+                ],
+                [
+                    {"text": "50%", "callback_data": f"ref_pct_{uid}_50"},
+                    {"text": "Clear (0%)", "callback_data": f"ref_pct_{uid}_0"}
+                ],
+                [{"text": "Back", "callback_data": f"ref_user_{uid}"}]
+            ]
+        }
+        await self._send(chat_id, text, keyboard)
+
+    async def _execute_set_discount_percent(self, chat_id, admin_id, uid, pct):
+        try:
+            percent = max(0, min(95, int(pct)))
+        except ValueError:
+            await self._send(chat_id, "❌ Invalid discount percentage.")
+            return
+        self.db.set_user_discount_percent(uid, percent, admin_chat_id=admin_id)
+        await self._send(chat_id, f"✅ One-time discount set: <b>{percent}%</b> for <code>{uid}</code>.")
+        await self._show_referral_user_detail(chat_id, uid)
+
+    async def _execute_reject_discount(self, chat_id, admin_id, uid):
+        self.db.set_user_discount_percent(uid, 0, admin_chat_id=admin_id)
+        await self._send(chat_id, f"✅ Discount rejected/cleared for <code>{uid}</code>.")
+        await self._show_referral_user_detail(chat_id, uid)
+
+    async def _show_manual_adjust_options(self, chat_id, uid):
+        text = (
+            f"<b>MANUAL WALLET ADJUST</b>\n"
+            f"User: <code>{uid}</code>\n"
+            f"Choose adjustment amount (rupees):"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "+50", "callback_data": f"ref_adjval_{uid}_50"},
+                    {"text": "+100", "callback_data": f"ref_adjval_{uid}_100"}
+                ],
+                [
+                    {"text": "-50", "callback_data": f"ref_adjval_{uid}_-50"},
+                    {"text": "-100", "callback_data": f"ref_adjval_{uid}_-100"}
+                ],
+                [{"text": "Back", "callback_data": f"ref_user_{uid}"}]
+            ]
+        }
+        await self._send(chat_id, text, keyboard)
+
+    async def _execute_manual_adjust(self, chat_id, admin_id, uid, amt):
+        try:
+            amount = int(amt)
+        except ValueError:
+            await self._send(chat_id, "❌ Invalid adjustment amount.")
+            return
+
+        entry_type = "adjust"
+        self.db.add_reward_ledger_entry(uid, entry_type, amount, reason=f"Manual adjust by admin {admin_id}")
+        self.db.log_referral_admin_action(admin_id, uid, "manual_adjust", amount_rupees=amount, note="Wallet manual adjust")
+        await self._send(chat_id, f"✅ Wallet adjusted by ₹{amount} for <code>{uid}</code>.")
+        await self._show_referral_user_detail(chat_id, uid)
 
     async def _handle_pulse(self, chat_id):
         await self._send(chat_id, "<b>Industrial Pulse...</b>")
@@ -641,6 +924,8 @@ class AdminPanel:
             total, used, _ = shutil.disk_usage("/")
             disk_pct = (used / total) * 100
             ram = psutil.virtual_memory().percent
+            process = psutil.Process(os.getpid())
+            rss = process.memory_info().rss / (1024 * 1024) # MB
             
             last_bk = self.db.get_config("last_backup", "Never")
             if last_bk != "Never":
@@ -654,7 +939,8 @@ class AdminPanel:
                 f"<b>Uptime:</b> <code>{uptime_str}</code>\n"
                 f"<b>DB Size:</b> <code>{db_size:.2f} MB</code>\n"
                 f"<b>Disk Used:</b> <code>{disk_pct:.1f}%</code>\n"
-                f"<b>RAM Used:</b> <code>{ram}%</code>\n"
+                f"<b>RAM Total:</b> <code>{ram}%</code>\n"
+                f"<b>Bot RAM:</b> <code>{rss:.1f} MB</code>\n"
                 f"<b>Last Backup:</b> <code>{last_bk}</code>\n"
                 f"------------------------------\n"
                 f"<i>IST: {ist_now}</i>"

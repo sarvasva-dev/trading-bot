@@ -96,9 +96,12 @@ class TelegramBot:
         commands = [
             {"command": "start", "description": "🚀 Activate Engine & Menu"},
             {"command": "plan", "description": "💎 My Subscription & Expiry"},
+            {"command": "myref", "description": "🎁 Refer & Earn Rewards"},
+            {"command": "refstats", "description": "📈 Referral Stats & Wallet"},
             {"command": "hisab", "description": "📝 View Billing Logs (Hisab)"},
             {"command": "subscribe", "description": "🛒 Recharge / Upgrade"},
-            {"command": "support", "description": "🛠️ Contact Admin (WhatsApp)"}
+            {"command": "support", "description": "🛠️ Contact Admin (WhatsApp)"},
+            {"command": "signals", "description": "📡 Last 10 Signals"}
         ]
         url = f"{self.base_url}/setMyCommands"
         try:
@@ -151,29 +154,67 @@ class TelegramBot:
                             
                             # Process User
                             is_new = False
+                            referral_code_from_start = None
                             if self.db:
                                 user = self.db.get_user(chat_id)
                                 if not user:
                                     source_tag = "direct"
                                     if text.startswith("/start "):
-                                        parts = text.split()
-                                        if len(parts) >= 2: source_tag = parts[1]
+                                        param = text.split(maxsplit=1)[1].strip()
+                                        # Parse referral deep-link: /start ref_<code>
+                                        if param.startswith("ref_"):
+                                            referral_code_from_start = param[4:]  # strip "ref_"
+                                            source_tag = referral_code_from_start
+                                        else:
+                                            source_tag = param
                                     is_new = self.db.save_user(chat_id, first_name, username, source=source_tag)
                                 else:
                                     self.db.sync_user(chat_id, first_name, username)
 
                             if is_new:
-                                await self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
-                                                      "⚡ <b>Follow the Beat of Big Money News with Smart Money.</b>\n"
-                                      "As a new user, you've been granted <b>2 Free Market-Days</b>.")
+                                trial_enabled = self.db.is_free_trial_enabled()
+                                trial_days = 0
+                                ref_code = referral_code_from_start
+
+                                if ref_code:
+                                    referrer_uid = self.db.get_user_id_by_referral_code(ref_code)
+                                    # Block self-referral
+                                    if referrer_uid and str(referrer_uid) != str(chat_id):
+                                        self.db.set_referral_attribution(chat_id, ref_code, referrer_uid)
+                                        self.db.save_referral_event(referrer_uid, chat_id, ref_code, "signup")
+                                        if trial_enabled:
+                                            trial_days = self.db.get_referral_trial_days()
+                                            self.db.save_referral_event(referrer_uid, chat_id, ref_code, "trial_started", amount=trial_days)
+                                        else:
+                                            self.db.save_referral_event(referrer_uid, chat_id, ref_code, "trial_skipped")
+                                        await self._send_raw(referrer_uid, "🎁 <b>New Referral!</b> Someone joined using your link. You'll earn rewards when they subscribe.")
+                                    elif referrer_uid and str(referrer_uid) == str(chat_id):
+                                        self.db.save_referral_event(chat_id, chat_id, ref_code, "invalid_referral", metadata={"reason": "self_referral"})
+                                    # else: unknown code — ignore silently
+                                else:
+                                    if trial_enabled:
+                                        trial_days = self.db.get_direct_trial_days()
+
+                                if trial_days > 0:
+                                    self.db.add_working_days(chat_id, trial_days)
+                                    self.db.toggle_user_status(chat_id, 1)
+                                    await self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
+                                                          "⚡ <b>Follow the Beat of Big Money News.</b>\n"
+                                                          f"As a new user, you've been granted <b>{trial_days} Free Market-Days</b>.")
+                                else:
+                                    await self._send_raw(chat_id, "🤝 <b>Professional Onboarding Complete.</b>\n"
+                                                          "Subscribe to a plan to start receiving institutional signals.")
+
+                            # Ensure referral code exists for every user
+                            self.db.get_referral_code(chat_id)
 
                             # Command Router
                             if text.startswith("/start"):
                                 await self._send_welcome(chat_id, first_name)
                             elif text in ("/plan", "/me"):
                                 await self._handle_plan(chat_id, first_name)
-                            elif text == "/subscribe":
-                                await self._handle_subscribe_menu(chat_id)
+                            elif text.startswith("/myref") or text.startswith("/refstats") or text == "/refer":
+                                await self._handle_myref(chat_id)
                             elif text == "/hisab" or text == "/billing":
                                 await self._handle_billing_history(chat_id)
                             elif text.startswith("/sub_"):
@@ -314,6 +355,35 @@ class TelegramBot:
             
         await self._send_raw(chat_id, msg, disable_web_preview=True)
 
+    async def _handle_myref(self, chat_id):
+        """Show user's personal referral link and stats."""
+        user = self.db.get_user(chat_id)
+        if not user:
+            await self._send_raw(chat_id, "❌ Please /start first.")
+            return
+        
+        # Get referral code
+        ref_code = self.db.get_referral_code(str(chat_id))
+        stats = self.db.get_referral_stats(str(chat_id))
+        
+        # Get bot username
+        bot_info = await self._execute_request("getMe", {})
+        bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
+        
+        referral_link = f"https://t.me/{bot_username}?start=ref_{ref_code}"
+        
+        msg = (
+            f"👥 <b>Your Referral Link</b>\n"
+            f"────────────────────────\n"
+            f"<code>{referral_link}</code>\n\n"
+            f"📊 <b>Your Stats:</b>\n"
+            f"  👤 Referred: {stats['joins']}\n"
+            f"  ✅ Converted: {stats['conversions']}\n"
+            f"  💰 Reward Balance: ₹{stats['reward_balance']}\n\n"
+            f"👉 <a href='{referral_link}'>Share This Link</a> with friends!"
+        )
+        await self._send_raw(chat_id, msg)
+
     async def _send_welcome(self, chat_id, first_name):
         """Unified Dashboard, Disclaimer and Onboarding (v10.2)."""
         user = self.db.get_user(chat_id)
@@ -321,8 +391,9 @@ class TelegramBot:
         intro = (
             f"🏛️ <b>{BOT_NAME} Institutional Engine</b>\n"
             f"<i>Follow the Beat of Big Money News with Smart Money</i>\n\n"
-            f"Welcome, {first_name}. You are connected to a high-precision NSE intelligence system. "
-            f"Our engine scans institutional filings in real-time to identify high-impact market signals.\n"
+            f"Welcome, {first_name}. You are connected to a high-precision NSE intelligence system.\n\n"
+            f"⚡ <b>Market Hours:</b> Live high-impact alerts dispatched instantly.\n"
+            f"🌅 <b>After-Market:</b> Off-hour news is consolidated and dispatched at 8:30 AM IST next trading day.\n"
         )
         
         disclaimer = (
@@ -508,15 +579,49 @@ class TelegramBot:
     async def _handle_plan_selection(self, chat_id, text, first_name):
         """Generates link for selected plan and saves for auto-verification."""
         plan_type = text.replace("/sub_", "")
-        await self._send_raw(chat_id, f"⌛ <b>Generating secure payment link for ₹{plan_type}...</b>")
+        try:
+            amount = int(plan_type)
+        except: return
+
+        # v8.0: Apply admin-controlled one-time percent discount
+        from nse_monitor.config import ENABLE_REFERRAL_DISCOUNT_WALLET
+        final_amount = amount
+        discount_percent = 0
+        discount_applied = 0
+        
+        if ENABLE_REFERRAL_DISCOUNT_WALLET:
+            discount_percent = self.db.get_user_discount_percent(chat_id)
+            if discount_percent > 0 and amount > 1:
+                discount_applied = min((amount * discount_percent) // 100, amount - 1)
+                final_amount = amount - discount_applied
+                
+        nudge = f" ({discount_percent}% OFF, Rs.{discount_applied} discount applied!)" if discount_applied > 0 else ""
+        await self._send_raw(chat_id, f"⌛ <b>Generating secure payment link for Rs.{final_amount}...</b>{nudge}")
         
         try:
             loop = asyncio.get_running_loop()
-            link_data = await loop.run_in_executor(None, lambda: self.payment_processor.create_payment_link(chat_id, plan_type, first_name))
-            
+            from nse_monitor.config import SUBSCRIPTION_PLANS
+            plan_meta = SUBSCRIPTION_PLANS.get(str(amount), {})
+            days = plan_meta.get("days", 0)
+            label = plan_meta.get("label", "Subscription")
+            # Pass days+label so Razorpay notes are correct even when amount is discounted
+            link_data = await loop.run_in_executor(
+                None,
+                lambda: self.payment_processor.create_payment_link(chat_id, str(final_amount), first_name, days=days, label=label)
+            )
+
             if link_data:
                 if self.db:
-                    self.db.save_payment_link(link_id=link_data["id"], chat_id=chat_id, days=link_data["days"])
+                    self.db.save_payment_link(
+                        link_id=link_data["id"],
+                        chat_id=chat_id,
+                        days=days,
+                        plan_amount=amount,
+                        payable_amount=final_amount,
+                        discount_percent=discount_percent,
+                        discount_rupees=discount_applied,
+                    )
+
                 msg = f"🔗 <b>Link Ready:</b>\n{link_data['short_url']}\n\n✅ Auto-credits after payment."
                 await self._send_raw(chat_id, msg)
         except Exception as e:
@@ -539,8 +644,25 @@ class TelegramBot:
         loop = asyncio.get_running_loop()
         days_to_add = await loop.run_in_executor(None, lambda: self.payment_processor.verify_payment_status(link_id))
         if days_to_add:
+            meta = self.db.get_payment_link_meta(link_id)
             self.db.add_working_days(chat_id, days_to_add)
             self.db.update_payment_link_status(link_id, 'processed')
+            
+            # v8.0: Credit Referral Reward
+            # Reverse-lookup plan amount from days using SUBSCRIPTION_PLANS
+            from nse_monitor.config import SUBSCRIPTION_PLANS
+            plan_amount = next(
+                (int(k) for k, p in SUBSCRIPTION_PLANS.items() if p["days"] == days_to_add), 0
+            )
+            payable_amount = int(meta.get("payable_amount") or 0) or plan_amount
+            
+            if payable_amount > 0:
+                self.db.record_first_payment(chat_id, payable_amount, link_id)
+                self.db.credit_referral_reward_on_conversion(chat_id, payable_amount, link_id)
+
+            if int(meta.get("discount_percent") or 0) > 0:
+                self.db.clear_user_discount_percent(chat_id)
+                
             await self._send_raw(chat_id, f"🎉 Success! {days_to_add} Market Days credited.")
         else:
             await self._send_raw(chat_id, "⏳ Transaction Pending. Try again in 5 mins.")
@@ -605,8 +727,15 @@ class TelegramBot:
         active_users = self.db.get_active_users() if self.db else []
         
         async def _send_one(cid):
+            user_code = self.db.get_referral_code(cid)
+            bot_info = await self._execute_request("getMe", {})
+            bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
+            
+            referral_nudge = f"\n\n🎁 <a href='https://t.me/{bot_username}?start=ref_{user_code}'>Refer a Friend & Earn</a>"
+            final_report = report_text + referral_nudge
+
             async with self.broadcast_semaphore:
-                res = await self._send_raw(cid, report_text, disable_web_page_preview=True)
+                res = await self._send_raw(cid, final_report, disable_web_page_preview=True)
                 await asyncio.sleep(1.0) # v5.2: Strict throttling for Semaphore(30)
                 return res
 
@@ -644,12 +773,30 @@ class TelegramBot:
             f"⚖️ <i>Bulkbeat TV — Non-SEBI Institutional Insights</i>"
         )
 
+        # v8.0: Mirror signal to Supabase Outbox
+        if self.db:
+            self.db.add_sync_outbox_row("signals", f"{symbol}_{int(time.time())}", {
+                "symbol": symbol,
+                "impact_score": impact_score,
+                "sentiment": sentiment,
+                "trigger": trigger,
+                "url": url
+            })
+
         active_users = self.db.get_active_users() if self.db else []
+        bot_info = await self._execute_request("getMe", {})
+        bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
         
         async def _dispatch_one(chat_id):
+            # v8.0: Appending personalized referral link to each message
+            user_code = self.db.get_referral_code(chat_id)
+            referral_link = f"https://t.me/{bot_username}?start=ref_{user_code}"
+            referral_nudge = f"\n\n📰 <a href='{url}'>Source</a> | 👥 <a href='{referral_link}'>Share & Earn</a>"
+            final_message = message + referral_nudge
+
             async with self.broadcast_semaphore:
                 # 1. Send text signal
-                await self._send_raw(chat_id, message, disable_web_page_preview=True)
+                await self._send_raw(chat_id, final_message, disable_web_page_preview=True)
                 
                 # 2. Attach PDF if applicable
                 from nse_monitor.config import TELEGRAM_SEND_PDF

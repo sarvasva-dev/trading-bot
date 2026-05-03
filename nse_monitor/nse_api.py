@@ -59,12 +59,13 @@ class NSEClient:
             # 1. Visit Home Page (Baseline cookies)
             async with self.session.get(NSE_BASE_URL, timeout=30) as resp:
                 await resp.text()
-            await asyncio.sleep(random.uniform(1, 3))
-            
+            await asyncio.sleep(random.uniform(2, 4))
+
             # 2. Visit Corporate Filings Page
             url = f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements"
             async with self.session.get(url, timeout=30) as resp:
                 await resp.text()
+            await asyncio.sleep(random.uniform(1, 2))
             
             logger.info("✅ NSE Connection: Secured & Stable (Async).")
             self.is_connected = True
@@ -95,14 +96,17 @@ class NSEClient:
                 logger.warning(f"⚠️ NSE Access Denied (403). Identity Pressure Detected.")
                 
                 if self.on_403:
-                    try: 
+                    try:
                         msg = f"🚨 <b>NSE IP PRESSURE:</b> 403 on {index}."
                         if asyncio.iscoroutinefunction(self.on_403):
                             await self.on_403(msg)
                         else:
                             self.on_403(msg)
-                    except: pass
-                
+                    except Exception as e:
+                        logger.warning("on_403 callback failed: %s", e)
+
+                # Back-off before re-init to avoid hammering NSE
+                await asyncio.sleep(random.uniform(5, 10))
                 await self._init_session()
                 # Retry once after re-init
                 async with self.session.get(NSE_API_URL, params=params, timeout=15) as retry_resp:

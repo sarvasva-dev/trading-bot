@@ -129,3 +129,28 @@ SUBSCRIPTION_PLANS = {
     "999": _get_plan("PLAN_999", "999:28", "Institutional Pro"),
     "7999": _get_plan("PLAN_7999", "7999:336", "Annual Industry Partner")
 }
+
+# 10. Referral + Supabase Feature Flags (v8.0 — Additive Monetization Layer)
+# All flags default OFF so existing production behaviour is 100% unchanged.
+
+# Master toggle: Referral system (deep-link parsing, code generation, event tracking)
+ENABLE_REFERRAL_SYSTEM = os.getenv("ENABLE_REFERRAL_SYSTEM", "0").strip() == "1"
+
+# Master toggle: Supabase mirror sync worker
+ENABLE_SUPABASE_SYNC = os.getenv("ENABLE_SUPABASE_SYNC", "0").strip() == "1"
+
+# Sub-feature: discount-wallet deduction at payment time
+ENABLE_REFERRAL_DISCOUNT_WALLET = os.getenv("ENABLE_REFERRAL_DISCOUNT_WALLET", "0").strip() == "1"
+
+# Trial days — used only when admin-panel free_trial_enabled toggle is ON
+# These are DB-driven at runtime; env vars are the boot-time defaults seeded into system_config.
+DIRECT_TRIAL_DAYS = int(os.getenv("DIRECT_TRIAL_DAYS", 0))      # 0 = no trial by default
+REFERRAL_TRIAL_DAYS = int(os.getenv("REFERRAL_TRIAL_DAYS", 7))  # 7 market-days for referred users
+
+# Reward percentage for referrer on first conversion (stored in DB; env is boot-time seed)
+REFERRAL_REWARD_PERCENT = int(os.getenv("REFERRAL_REWARD_PERCENT", 10))  # 10%
+
+# Supabase REST endpoint + service-role key (never expose service-role key on client side)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_SYNC_BATCH_SIZE = int(os.getenv("SUPABASE_SYNC_BATCH_SIZE", 50))

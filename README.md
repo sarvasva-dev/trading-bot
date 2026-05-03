@@ -39,6 +39,8 @@
 | `/verify` | Manual payment verify | ✅ Working |
 | `/support` | WhatsApp admin link | ✅ Working |
 | `/status` (admin only) | NSE + AI + DB live check | ✅ Working |
+| `/myref` | Personal referral link + stats | ✅ Working |
+| `/refstats` | Referral joins/conversions/wallet | ✅ Working |
 | Rate limiting (5 req/min) | Brute-force protection | ✅ Working |
 | Bcrypt admin login (`/login`) | Session auth | ✅ Working |
 
@@ -52,6 +54,9 @@
 | `/pulse` / `/health` — Uptime, RAM, Disk, DB size | ✅ Working |
 | Bot Config → AI Threshold (4/6/8) | ✅ Working |
 | Bot Config → Media Mute toggle | ✅ Working |
+| Bot Config → Free Trial ON/OFF toggle | ✅ Working |
+| Referral System → converted/non-converted/pending-trial lists | ✅ Working |
+| Referral System → payout/discount/manual wallet adjust actions | ✅ Working |
 | User Audit — paginated list | ✅ Working |
 | Manage User → Grant Days | ✅ Working |
 | Manage User → Reset to 0 | ✅ Working |
@@ -72,7 +77,9 @@
 | Razorpay payment link generation | ✅ Working |
 | Auto payment verification (webhook poll) | ✅ Working |
 | Market-day billing (no deduction on holidays) | ✅ Working |
-| 2 free trial days for new users | ✅ Working |
+| Free trial via admin toggle (ON/OFF) for new users | ✅ Working |
+| Admin-controlled one-time percent discount per user | ✅ Working |
+| Referral reward credit (10% first paid conversion) | ✅ Working |
 | Expiry nudge (1 day left → reminder) | ✅ Working |
 
 ---

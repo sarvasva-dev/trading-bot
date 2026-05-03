@@ -19,6 +19,7 @@ class MarketScheduler:
             job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 1800},
         )
         self.system = system
+        self._sync_bridge = None
 
     async def _ensure_calendar_is_fresh(self):
         """Refresh holiday file when current year is missing, to avoid wrong trading-day decisions."""
@@ -72,6 +73,27 @@ class MarketScheduler:
         if ENABLE_MORNING_REPORT and self.system.db.get_config("last_pre_market_report_date", "") != report_day:
             await self._run_pre_market_report()
 
+
+    async def _run_supabase_sync(self):
+        """Non-blocking Supabase outbox flush job."""
+        try:
+            from nse_monitor.sync_bridge import SupabaseSyncBridge
+
+            if self._sync_bridge is None:
+                self._sync_bridge = SupabaseSyncBridge(self.system.db)
+
+            stats = self._sync_bridge.flush_once()
+            if stats.get("skipped"):
+                return
+            if stats["queued"]:
+                logger.info(
+                    "Supabase sync: queued=%s synced=%s failed=%s",
+                    stats["queued"],
+                    stats["synced"],
+                    stats["failed"],
+                )
+        except Exception as e:
+            logger.error("Supabase sync job failed: %s", e)
 
     async def safe_run_cycle(self):
         """Wraps the intelligence cycle in crash protection (Async)."""
@@ -172,6 +194,16 @@ class MarketScheduler:
             minute=MORNING_QUEUE_DISPATCH_MINUTE,
             id='morning_signal_dispatch'
         )
+
+        # 9. Supabase Sync Bridge (every 3 min, non-blocking)
+        from nse_monitor.config import ENABLE_SUPABASE_SYNC
+        if ENABLE_SUPABASE_SYNC:
+            self.scheduler.add_job(
+                self._run_supabase_sync,
+                'interval',
+                minutes=3,
+                id='supabase_sync_bridge'
+            )
 
         self.scheduler.start()
         await self._maybe_send_startup_catchup_report()

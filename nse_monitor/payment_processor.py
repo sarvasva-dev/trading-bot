@@ -20,43 +20,57 @@ class RazorpayProcessor:
         else:
             logger.warning("Razorpay library not found. Payment features will be disabled (Rule #24).")
 
-    def create_payment_link(self, chat_id, plan_type, first_name="User"):
-        """Generates a Razorpay Payment Link for a specific plan."""
+    def create_payment_link(self, chat_id, amount_str, first_name="User", days=None, label=None):
+        """Generates a Razorpay Payment Link for a given amount.
+        amount_str: the actual payable amount (may differ from plan price after discount).
+        days/label: optional override; if omitted, looked up from SUBSCRIPTION_PLANS by amount.
+        """
         if not self.client: return None
-        
-        # RULE #24: Safe dynamic plan fetch
-        plan = SUBSCRIPTION_PLANS.get(str(plan_type))
-        if not plan: 
-            logger.error(f"Invalid plan type requested: {plan_type}")
+
+        try:
+            amount = int(amount_str)
+        except (ValueError, TypeError):
+            logger.error(f"Invalid amount: {amount_str}")
             return None
-        
+
+        # Look up plan metadata by amount if not provided
+        if days is None or label is None:
+            plan = SUBSCRIPTION_PLANS.get(str(amount))
+            if plan:
+                days = days or plan["days"]
+                label = label or plan["label"]
+            else:
+                # Discounted amount — find closest plan by days already stored
+                days = days or 0
+                label = label or "Subscription"
+
         try:
             payload = {
-                "amount": plan["amount"] * 100,
+                "amount": amount * 100,
                 "currency": "INR",
                 "accept_partial": False,
                 "first_min_partial_amount": 0,
                 "expire_by": int((datetime.now() + timedelta(days=1)).timestamp()),
-                "reference_id": f"SUB_{chat_id}_{plan_type}_{int(datetime.now().timestamp())}",
-                "description": f"Bulkbeat TV {plan['label']} Access",
+                "reference_id": f"SUB_{chat_id}_{amount}_{int(datetime.now().timestamp())}",
+                "description": f"Bulkbeat TV {label} Access",
                 "customer": {"name": first_name, "contact": "", "email": ""},
                 "notify": {"sms": False, "email": False},
                 "reminder_enable": False,
                 "notes": {
                     "chat_id": str(chat_id),
-                    "plan_days": str(plan["days"])
+                    "plan_days": str(days)
                 },
                 "callback_url": "",
                 "callback_method": "get"
             }
-            
-            logger.info(f"Generating Razorpay Link for {chat_id} | Plan: {plan_type}")
+
+            logger.info(f"Generating Razorpay Link for {chat_id} | Amount: {amount} | Days: {days}")
             pl = self.client.payment_link.create(payload)
             logger.info(f"✅ Success: Razorpay Link Generated: {pl['id']}")
             return {
                 "id": pl["id"],
                 "short_url": pl["short_url"],
-                "days": plan["days"]
+                "days": days
             }
         except Exception as e:
             logger.error(f"❌ Error creating Razorpay link: {e}", exc_info=True)
