@@ -462,16 +462,19 @@ class LLMProcessor:
 
             symbol_val = (sym.group(1) or sym.group(2)).strip() if sym else "UNKNOWN"
             score_val = int(sco.group(1) or sco.group(2) or sco.group(3)) if sco else 0
+            
+            trig = re.search(r'"trigger"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+            trigger_val = trig.group(1).strip() if trig else "Institutional Corporate Filing Detected"
 
             return {
                 "valid_event": valid,
                 "symbol": symbol_val,
                 "impact_score": score_val,
-                "trigger": "Extracted via regex from partial response",
+                "trigger": trigger_val,
                 "sentiment": sentiment,
                 "is_big_ticket": False, "is_sme": False, "time_critical": False,
                 "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
-                "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed but core metrics extracted."
+                "key_insight": "Automated regex processing.", "summary": "Full analysis failed but core metrics extracted."
             }
         except Exception as e:
             logger.debug(f"Regex extract failed: {e}")
