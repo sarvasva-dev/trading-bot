@@ -260,7 +260,7 @@ class LLMProcessor:
             
         url = "https://api.sarvam.ai/v1/chat/completions"
         headers = {
-            "api-subscription-key": self.sarvam_key,
+            "Authorization": f"Bearer {self.sarvam_key}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -271,16 +271,23 @@ class LLMProcessor:
                     "content": (
                         "You are a senior quantitative analyst at an Indian hedge fund. "
                         "You MUST return ONLY valid JSON. "
-                        "CRITICAL: Do NOT output any reasoning, do NOT use <think> tags, and do NOT output markdown formatting. "
                         "Start your response EXACTLY with { and end exactly with }. "
-                        "Apply all 22 institutional rules rigorously."
+                        "Apply all 22 institutional rules rigorously.\n\n"
+                        "EXAMPLE OUTPUT:\n"
+                        "{\n"
+                        "  \"valid_event\": true,\n"
+                        "  \"symbol\": \"RELIANCE\",\n"
+                        "  \"trigger\": \"Reliance signs $5B JV with Disney\",\n"
+                        "  \"impact_score\": 9,\n"
+                        "  \"sentiment\": \"Bullish\",\n"
+                        "  \"summary\": \"Strategic JV confirmed.\"\n"
+                        "}"
                     )
                 },
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.1,
-            "max_tokens": 4096,
-            "response_format": {"type": "json_object"}
+            "temperature": 0.0,
+            "max_tokens": 4096
         }
         
         await self.ensure_session()
@@ -380,30 +387,37 @@ class LLMProcessor:
     def _robust_json_parse(self, raw_text):
         """Extracts and repairs JSON from LLM output."""
         if not raw_text: return None
-        cleaned = raw_text.strip()
         
-        # Strip out thinking/reasoning blocks if they exist like <think>...</think>
-        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL)
-        
-        if "```" in cleaned:
-            cleaned = re.sub(r"```json|```", "", cleaned).strip()
-
-        start = cleaned.find("{")
-        if start == -1: 
-            return self._regex_extract(cleaned)
-
-        end = cleaned.rfind("}")
-        if end == -1 or end < start:
-            json_str = cleaned[start:] + "\n}"
-        else:
-            json_str = cleaned[start:end + 1]
-
-        json_str = re.sub(r",\s*([\]\}])", r"\1", json_str)
-
         try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            return self._regex_extract(json_str)
+            # Clean possible markdown and thinking tags
+            cleaned = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
+            cleaned = re.sub(r'```json|```', '', cleaned).strip()
+            
+            # Find the actual JSON block
+            start = cleaned.find('{')
+            end = cleaned.rfind('}')
+            
+            if start != -1:
+                if end != -1 and end > start:
+                    json_str = cleaned[start:end+1]
+                else:
+                    # Truncated recovery
+                    json_str = cleaned[start:]
+                    if not json_str.endswith('}'):
+                        json_str += ' }'
+                
+                # Cleanup trailing commas and common errors
+                json_str = re.sub(r',\s*([\]\}])', r'\1', json_str)
+                
+                try:
+                    return json.loads(json_str)
+                except:
+                    # Final attempt: manual regex extraction
+                    return self._regex_extract(cleaned)
+            
+            return self._regex_extract(cleaned)
+        except Exception:
+            return self._regex_extract(raw_text)
 
     def _extract_amount(self, text):
         """Finds Crore/Billion values in filing text."""
