@@ -698,8 +698,28 @@ async def main():
 
     logger.info("Warmup complete. System entering high-trust monitoring mode.")
 
-    while True:
-        await asyncio.sleep(1)
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        logger.info("Shutdown signal received in event loop. Closing sessions...")
+    finally:
+        # Graceful cleanup to prevent 'Unclosed client session' errors
+        try: 
+            await system.bot.close()
+        except: pass
+        try: 
+            if hasattr(system, 'llm_processor') and hasattr(system.llm_processor, 'close'):
+                await system.llm_processor.close()
+        except: pass
+        try:
+            if system.nse_client and hasattr(system.nse_client, 'session') and system.nse_client.session:
+                await system.nse_client.session.close()
+        except: pass
+        try:
+            if system.health_session:
+                await system.health_session.close()
+        except: pass
 
 
 if __name__ == "__main__":
