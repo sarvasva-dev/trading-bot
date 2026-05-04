@@ -308,7 +308,15 @@ class LLMProcessor:
 
                     # Navigate into expected structure, but guard against missing keys
                     try:
-                        content_raw = data['choices'][0]['message']['content']
+                        message = data['choices'][0]['message']
+                        content_raw = message.get('content') or ''
+                        reasoning = message.get('reasoning_content') or ''
+                        
+                        if not content_raw.strip() and reasoning.strip():
+                            content_raw = reasoning  # Fallback to reasoning if content is missing
+                        elif reasoning.strip():
+                            content_raw = reasoning + "\n" + content_raw # Combine if both present
+                            
                     except Exception:
                         logger.error("Sarvam response JSON missing expected keys.")
                         logger.debug(f"Sarvam JSON keys: {list(data.keys())} | raw: {text[:2000]}")
@@ -317,7 +325,7 @@ class LLMProcessor:
                             continue
                         return None
 
-                    if not content_raw:
+                    if not content_raw or not content_raw.strip():
                         logger.warning("Sarvam returned empty response content.")
                         logger.debug(f"Sarvam full JSON (truncated 2000): {text[:2000]}")
                         if attempt < max_attempts - 1:
