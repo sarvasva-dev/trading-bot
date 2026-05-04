@@ -62,3 +62,29 @@ class SupabaseClient:
 
     def upsert_daily_stats(self, payload: Dict[str, Any]) -> bool:
         return self._post("dispatch_stats_daily", [payload])
+
+    def get_pending_commands(self) -> List[Dict[str, Any]]:
+        """v8.2: Polls for pending VPS commands from Supabase."""
+        if not self._ready: return []
+        endpoint = f"{self.url}/rest/v1/vps_commands?status=eq.pending"
+        try:
+            resp = requests.get(endpoint, headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+            return []
+        except Exception as e:
+            logger.error("Supabase GET vps_commands exception: %s", e)
+            return []
+
+    def mark_command_done(self, cmd_id: int, status: str = "completed") -> bool:
+        """v8.2: Marks a VPS command as completed or failed."""
+        if not self._ready: return False
+        endpoint = f"{self.url}/rest/v1/vps_commands?id=eq.{cmd_id}"
+        headers = self._headers()
+        headers["Prefer"] = "return=minimal"
+        try:
+            resp = requests.patch(endpoint, json={"status": status}, headers=headers, timeout=10)
+            return resp.status_code in (200, 204)
+        except Exception as e:
+            logger.error("Supabase PATCH vps_commands exception: %s", e)
+            return False
