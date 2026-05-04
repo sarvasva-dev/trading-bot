@@ -264,7 +264,7 @@ class LLMProcessor:
             "Content-Type": "application/json"
         }
         payload = {
-          "model": SARVAM_MODEL,
+            "model": SARVAM_MODEL,
             "messages": [
                 {
                     "role": "system",
@@ -276,7 +276,8 @@ class LLMProcessor:
                 },
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.1
+            "temperature": 0.1,
+            "max_tokens": 1024
         }
         
         await self.ensure_session()
