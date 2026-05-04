@@ -442,13 +442,21 @@ class TelegramBot:
                 f"────────────────────────\n"
                 f"{disclaimer}\n"
             )
-            welcome_text += self._get_plan_menu()
+            welcome_text += self._get_plan_menu(chat_id)
             await self._send_raw(chat_id, welcome_text)
 
-    def _get_plan_menu(self):
+    def _get_plan_menu(self, chat_id=None):
         """Helper to return the structured plan menu text (v1.3.1)."""
         from nse_monitor.config import SUBSCRIPTION_PLANS
         
+        # v8.1: Special Influencer Filtering (Aarav Rule)
+        # If referred by 7304850675 (Aarav), show only the 999 plan.
+        is_restricted = False
+        if chat_id and self.db:
+            referrer_id = self.db.get_referred_by_id(chat_id)
+            if referrer_id == "7304850675":
+                is_restricted = True
+
         msg = (
             "💎 <b>INSTITUTIONAL ACCESS PLANS</b>\n"
             "<i>Market-Day Billing (Zero loss on holidays)</i>\n"
@@ -457,6 +465,9 @@ class TelegramBot:
         
         sorted_keys = sorted(SUBSCRIPTION_PLANS.keys(), key=lambda x: int(x))
         for k in sorted_keys:
+            if is_restricted and k != "999":
+                continue
+
             plan = SUBSCRIPTION_PLANS[k]
             price = plan["amount"]
             days = plan["days"]
@@ -473,7 +484,7 @@ class TelegramBot:
     @rate_limit(max_calls=5, period=60)
     async def _handle_subscribe_menu(self, chat_id):
         """Displays available plans to the user."""
-        await self._send_raw(chat_id, self._get_plan_menu())
+        await self._send_raw(chat_id, self._get_plan_menu(chat_id))
 
     async def _send_expiry_reminder(self, chat_id):
         """Sends a nudge to expired users."""
@@ -483,7 +494,7 @@ class TelegramBot:
             "Your Market-Day credits have been exhausted. "
             "To continue receiving high-impact NSE signals, please subscribe.\n\n"
         )
-        msg += self._get_plan_menu()
+        msg += self._get_plan_menu(chat_id)
         await self._send_raw(chat_id, msg)
 
     @rate_limit(max_calls=3, period=60) # Strict rate limit for login attempts
@@ -582,6 +593,13 @@ class TelegramBot:
         try:
             amount = int(plan_type)
         except: return
+
+        # v8.1: Special Influencer Filtering (Aarav Rule)
+        if self.db:
+            referrer_id = self.db.get_referred_by_id(chat_id)
+            if referrer_id == "7304850675" and amount != 999:
+                 await self._send_raw(chat_id, "⚠️ <b>Selection Blocked:</b> Your referral tier is restricted to the 28-Day Institutional Pro plan.")
+                 return
 
         # v8.0: Apply admin-controlled one-time percent discount
         from nse_monitor.config import ENABLE_REFERRAL_DISCOUNT_WALLET

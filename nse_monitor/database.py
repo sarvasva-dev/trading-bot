@@ -1383,6 +1383,13 @@ class Database:
                 (referral_code, str(referrer_user_id), str(user_id))
             )
 
+    def get_referred_by_id(self, user_id: str):
+        """v8.1: Returns the user_id of the person who referred this user."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT referred_by_user_id FROM users WHERE id = ?", (str(user_id),))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
     # ── v8.0: Referral Events ─────────────────────────────────────────────────
 
     def save_referral_event(self, referrer_user_id: str, referred_user_id: str,
