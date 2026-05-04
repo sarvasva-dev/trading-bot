@@ -449,33 +449,45 @@ class LLMProcessor:
         """Last-ditch regex extraction when JSON is broken."""
         try:
             # More aggressive regex extraction for cutoff texts
-            sym = re.search(r'"symbol":\s*"([^"]+)"|symbol[:\s]+([A-Z]+)', text, re.IGNORECASE)
-            sco = re.search(r'"impact_score":\s*(\d+)|impact_score[:\s]+(\d+)|score[:\s]+(\d+)', text, re.IGNORECASE)
+            sym = re.search(r'"symbol"\s*:\s*"([^"]+)"|symbol[:\s]+([A-Z0-9_]+)', text, re.IGNORECASE)
+            sco = re.search(r'"impact_score"\s*:\s*"?(\d+)"?|impact_score[:\s]+"?(\d+)"?|score[:\s]+"?(\d+)"?', text, re.IGNORECASE)
             
-            # Default to neutral if we can't find sentiment
             sen_match = re.search(r'Bullish|Bearish|Neutral', text, re.IGNORECASE)
             sentiment = sen_match.group(0).capitalize() if sen_match else "Neutral"
             
-            # If the text explicitly talks about "valid_event = true" or we have a score >= 1
-            valid = "valid_event = true" in text.lower() or "valid_event: true" in text.lower() or (sco and int(sco.group(1) or sco.group(2) or sco.group(3)) > 0)
+            valid = "valid_event" in text and ("true" in text[text.find("valid_event"):].lower()[:20] or "1" in text[text.find("valid_event"):].lower()[:20])
+            if not valid and sco:
+                 if int(sco.group(1) or sco.group(2) or sco.group(3)) > 0:
+                     valid = True
 
-            if sym and sco:
-                score_val = int(sco.group(1) or sco.group(2) or sco.group(3))
-                symbol_val = sym.group(1) or sym.group(2)
-                return {
-                    "valid_event": valid,
-                    "symbol": symbol_val.strip(),
-                    "impact_score": score_val,
-                    "trigger": "Extracted via regex from partial response",
-                    "sentiment": sentiment,
-                    "is_big_ticket": False, "is_sme": False, "time_critical": False,
-                    "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
-                    "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed but core metrics extracted."
-                }
+            symbol_val = (sym.group(1) or sym.group(2)).strip() if sym else "UNKNOWN"
+            score_val = int(sco.group(1) or sco.group(2) or sco.group(3)) if sco else 0
+
+            return {
+                "valid_event": valid,
+                "symbol": symbol_val,
+                "impact_score": score_val,
+                "trigger": "Extracted via regex from partial response",
+                "sentiment": sentiment,
+                "is_big_ticket": False, "is_sme": False, "time_critical": False,
+                "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
+                "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed but core metrics extracted."
+            }
         except Exception as e:
             logger.debug(f"Regex extract failed: {e}")
             pass
-        return None
+        
+        # Prevent infinite retries by returning a safe neutral fallback
+        return {
+             "valid_event": False,
+             "symbol": "UNKNOWN",
+             "impact_score": 0,
+             "trigger": "Unparseable LLM output",
+             "sentiment": "Neutral",
+             "is_big_ticket": False, "is_sme": False, "time_critical": False,
+             "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
+             "key_insight": "Failed to parse.", "summary": "LLM output was completely unparseable."
+        }
 
     async def summarize_morning_batch(self, analyzed_items):
         """v4.0: Creates an executive summary with hard caps and deterministic fallback (Async)."""
