@@ -270,14 +270,17 @@ class LLMProcessor:
                     "role": "system",
                     "content": (
                         "You are a senior quantitative analyst at an Indian hedge fund. "
-                        "You MUST return ONLY valid JSON. No markdown, no prose, no explanation. "
+                        "You MUST return ONLY valid JSON. "
+                        "CRITICAL: Do NOT output any reasoning, do NOT use <think> tags, and do NOT output markdown formatting. "
+                        "Start your response EXACTLY with { and end exactly with }. "
                         "Apply all 22 institutional rules rigorously."
                     )
                 },
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.1,
-            "max_tokens": 1024
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"}
         }
         
         await self.ensure_session()
