@@ -312,11 +312,17 @@ class LLMProcessor:
                         content_raw = message.get('content') or ''
                         reasoning = message.get('reasoning_content') or ''
                         
-                        if not content_raw.strip() and reasoning.strip():
-                            content_raw = reasoning  # Fallback to reasoning if content is missing
-                        elif reasoning.strip():
-                            content_raw = reasoning + "\n" + content_raw # Combine if both present
-                            
+                        if not content_raw.strip() and reasoning and reasoning.strip():
+                            content_raw = reasoning
+                        
+                        # Fix: If Sarvam model doesn't return JSON but just thinking text,
+                        # and JSON is completely missing, we need to ensure the _robust_json_parse
+                        # handles it properly. But the main issue here is the model isn't outputting
+                        # the JSON we requested. It cuts off.
+                        # Let's force it to output JSON by appending to the system prompt or using regex fallback.
+                        if "{" not in content_raw:
+                           logger.warning("No JSON brackets found in output, likely cutoff.")
+                           
                     except Exception:
                         logger.error("Sarvam response JSON missing expected keys.")
                         logger.debug(f"Sarvam JSON keys: {list(data.keys())} | raw: {text[:2000]}")
@@ -371,11 +377,16 @@ class LLMProcessor:
         """Extracts and repairs JSON from LLM output."""
         if not raw_text: return None
         cleaned = raw_text.strip()
+        
+        # Strip out thinking/reasoning blocks if they exist like <think>...</think>
+        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL)
+        
         if "```" in cleaned:
             cleaned = re.sub(r"```json|```", "", cleaned).strip()
 
         start = cleaned.find("{")
-        if start == -1: return None
+        if start == -1: 
+            return self._regex_extract(cleaned)
 
         end = cleaned.rfind("}")
         if end == -1 or end < start:
@@ -421,24 +432,33 @@ class LLMProcessor:
     def _regex_extract(self, text):
         """Last-ditch regex extraction when JSON is broken."""
         try:
-            valid = "true" in text.lower()
-            sym = re.search(r'"symbol":\s*"([^"]+)"', text)
-            sco = re.search(r'"impact_score":\s*(\d+)', text)
-            tri = re.search(r'"trigger":\s*"([^"]+)"', text)
-            sen = re.search(r'"sentiment":\s*"([^"]+)"', text)
+            # More aggressive regex extraction for cutoff texts
+            sym = re.search(r'"symbol":\s*"([^"]+)"|symbol[:\s]+([A-Z]+)', text, re.IGNORECASE)
+            sco = re.search(r'"impact_score":\s*(\d+)|impact_score[:\s]+(\d+)|score[:\s]+(\d+)', text, re.IGNORECASE)
+            
+            # Default to neutral if we can't find sentiment
+            sen_match = re.search(r'Bullish|Bearish|Neutral', text, re.IGNORECASE)
+            sentiment = sen_match.group(0).capitalize() if sen_match else "Neutral"
+            
+            # If the text explicitly talks about "valid_event = true" or we have a score >= 1
+            valid = "valid_event = true" in text.lower() or "valid_event: true" in text.lower() or (sco and int(sco.group(1) or sco.group(2) or sco.group(3)) > 0)
 
             if sym and sco:
+                score_val = int(sco.group(1) or sco.group(2) or sco.group(3))
+                symbol_val = sym.group(1) or sym.group(2)
                 return {
                     "valid_event": valid,
-                    "symbol": sym.group(1),
-                    "impact_score": int(sco.group(1)),
-                    "trigger": tri.group(1) if tri else "Partial analysis",
-                    "sentiment": sen.group(1) if sen else "Neutral",
+                    "symbol": symbol_val.strip(),
+                    "impact_score": score_val,
+                    "trigger": "Extracted via regex from partial response",
+                    "sentiment": sentiment,
                     "is_big_ticket": False, "is_sme": False, "time_critical": False,
                     "global_linkage": False, "sector": "Unknown", "expected_move": "Intraday",
-                    "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed."
+                    "key_insight": "Regex extraction fallback.", "summary": "Full analysis failed but core metrics extracted."
                 }
-        except: pass
+        except Exception as e:
+            logger.debug(f"Regex extract failed: {e}")
+            pass
         return None
 
     async def summarize_morning_batch(self, analyzed_items):
