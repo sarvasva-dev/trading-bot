@@ -726,17 +726,21 @@ class TelegramBot:
         if not self.token: return
         active_users = self.db.get_active_users() if self.db else []
         
+        # Fetch bot username once outside the loop
+        bot_info = await self._execute_request("getMe", {})
+        bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
+
         async def _send_one(cid):
             user_code = self.db.get_referral_code(cid)
-            bot_info = await self._execute_request("getMe", {})
-            bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
+            referral_link = f"https://t.me/{bot_username}?start=ref_{user_code}"
             
-            referral_nudge = f"\n\n🎁 <a href='https://t.me/{bot_username}?start=ref_{user_code}'>Refer a Friend & Earn</a>"
+            # v15.1: Copyable referral link via <code>
+            referral_nudge = f"\n\n🎁 <b>Refer & Earn:</b> <code>{referral_link}</code>"
             final_report = report_text + referral_nudge
 
             async with self.broadcast_semaphore:
                 res = await self._send_raw(cid, final_report, disable_web_page_preview=True)
-                await asyncio.sleep(1.0) # v5.2: Strict throttling for Semaphore(30)
+                await asyncio.sleep(1.0) # v5.2: Strict throttling
                 return res
 
         # Dispatch all in parallel with semaphore throttling
@@ -784,14 +788,17 @@ class TelegramBot:
             })
 
         active_users = self.db.get_active_users() if self.db else []
+        # Fetch bot username once outside the loop
         bot_info = await self._execute_request("getMe", {})
         bot_username = bot_info["result"]["username"] if bot_info and "result" in bot_info else "BulkBeatTV_Bot"
         
         async def _dispatch_one(chat_id):
-            # v8.0: Appending personalized referral link to each message
+            # v15.1: Appending copyable personalized referral link
             user_code = self.db.get_referral_code(chat_id)
             referral_link = f"https://t.me/{bot_username}?start=ref_{user_code}"
-            referral_nudge = f"\n\n📰 <a href='{url}'>Source</a> | 👥 <a href='{referral_link}'>Share & Earn</a>"
+            
+            # Use <code> tags for one-tap copy
+            referral_nudge = f"\n\n📰 <a href='{url}'>Source</a> | 👥 <b>Share:</b> <code>{referral_link}</code>"
             final_message = message + referral_nudge
 
             async with self.broadcast_semaphore:
