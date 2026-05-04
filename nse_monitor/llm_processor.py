@@ -280,75 +280,75 @@ class LLMProcessor:
         }
         
         await self.ensure_session()
-      max_attempts = 4
-      for attempt in range(max_attempts):
-        try:
-          logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/{max_attempts})...")
-          async with self.session.post(url, headers=headers, json=payload, timeout=120) as r:
-            status = r.status
-            text = await r.text()
-
-            if status != 200:
-              snippet = text[:1000] if text else "<no-body>"
-              logger.error(f"Sarvam API Error: {status} - body: {snippet}")
-              if attempt < max_attempts - 1:
-                await asyncio.sleep((2 ** attempt) + 0.5)
-              continue
-
-            # Try to parse JSON body safely and log raw response for debugging
+        max_attempts = 4
+        for attempt in range(max_attempts):
             try:
-              data = json.loads(text)
-            except Exception:
-              logger.warning("Sarvam returned non-JSON body; storing raw text for inspection.")
-              logger.debug(f"Sarvam raw response body (truncated 2000): {text[:2000]}")
-              if attempt < max_attempts - 1:
-                await asyncio.sleep((2 ** attempt) + 0.5)
+                logger.info(f"📡 AI Dispatch: Sarvam Async Core (Attempt {attempt + 1}/{max_attempts})...")
+                async with self.session.post(url, headers=headers, json=payload, timeout=120) as r:
+                    status = r.status
+                    text = await r.text()
+
+                    if status != 200:
+                        snippet = text[:1000] if text else "<no-body>"
+                        logger.error(f"Sarvam API Error: {status} - body: {snippet}")
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((2 ** attempt) + 0.5)
+                        continue
+
+                    # Try to parse JSON body safely and log raw response for debugging
+                    try:
+                        data = json.loads(text)
+                    except Exception:
+                        logger.warning("Sarvam returned non-JSON body; storing raw text for inspection.")
+                        logger.debug(f"Sarvam raw response body (truncated 2000): {text[:2000]}")
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((2 ** attempt) + 0.5)
+                            continue
+                        return None
+
+                    # Navigate into expected structure, but guard against missing keys
+                    try:
+                        content_raw = data['choices'][0]['message']['content']
+                    except Exception:
+                        logger.error("Sarvam response JSON missing expected keys.")
+                        logger.debug(f"Sarvam JSON keys: {list(data.keys())} | raw: {text[:2000]}")
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((2 ** attempt) + 0.5)
+                            continue
+                        return None
+
+                    if not content_raw:
+                        logger.warning("Sarvam returned empty response content.")
+                        logger.debug(f"Sarvam full JSON (truncated 2000): {text[:2000]}")
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((2 ** attempt) + 0.5)
+                            continue
+                        return None
+
+                    logger.debug(f"Sarvam content_raw (truncated 2000): {content_raw[:2000]}")
+                    parsed = self._robust_json_parse(content_raw)
+                    if parsed is None:
+                        logger.warning("Sarvam content could not be parsed to JSON.")
+                        logger.debug(f"Content causing parse failure (truncated 2000): {content_raw[:2000]}")
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep((2 ** attempt) + 0.5)
+                            continue
+                        return None
+
+                    return parsed
+
+            except asyncio.TimeoutError:
+                logger.error(f"Sarvam AI attempt {attempt + 1} timed out.")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep((2 ** attempt) + 0.5)
                 continue
-              return None
-
-            # Navigate into expected structure, but guard against missing keys
-            try:
-              content_raw = data['choices'][0]['message']['content']
-            except Exception:
-              logger.error("Sarvam response JSON missing expected keys.")
-              logger.debug(f"Sarvam JSON keys: {list(data.keys())} | raw: {text[:2000]}")
-              if attempt < max_attempts - 1:
-                await asyncio.sleep((2 ** attempt) + 0.5)
+            except Exception as e:
+                logger.exception(f"Sarvam AI attempt {attempt + 1} failed with exception: {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep((2 ** attempt) + 0.5)
                 continue
-              return None
 
-            if not content_raw:
-              logger.warning("Sarvam returned empty response content.")
-              logger.debug(f"Sarvam full JSON (truncated 2000): {text[:2000]}")
-              if attempt < max_attempts - 1:
-                await asyncio.sleep((2 ** attempt) + 0.5)
-                continue
-              return None
-
-            logger.debug(f"Sarvam content_raw (truncated 2000): {content_raw[:2000]}")
-            parsed = self._robust_json_parse(content_raw)
-            if parsed is None:
-              logger.warning("Sarvam content could not be parsed to JSON.")
-              logger.debug(f"Content causing parse failure (truncated 2000): {content_raw[:2000]}")
-              if attempt < max_attempts - 1:
-                await asyncio.sleep((2 ** attempt) + 0.5)
-                continue
-              return None
-
-            return parsed
-
-        except asyncio.TimeoutError:
-          logger.error(f"Sarvam AI attempt {attempt + 1} timed out.")
-          if attempt < max_attempts - 1:
-            await asyncio.sleep((2 ** attempt) + 0.5)
-          continue
-        except Exception as e:
-          logger.exception(f"Sarvam AI attempt {attempt + 1} failed with exception: {e}")
-          if attempt < max_attempts - 1:
-            await asyncio.sleep((2 ** attempt) + 0.5)
-          continue
-
-      return None
+        return None
 
     def _sanitize_for_prompt(self, text, max_len=500):
         """Rule #22: Security Sanitization to prevent LLM Prompt Injection."""
