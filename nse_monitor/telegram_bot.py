@@ -353,7 +353,7 @@ class TelegramBot:
                 msg += f"   🔗 <a href='{s['url']}'>View Document</a>\n"
             msg += "────────────────────────\n"
             
-        await self._send_raw(chat_id, msg, disable_web_preview=True)
+        await self._send_raw(chat_id, msg, disable_web_page_preview=True)
 
     async def _handle_myref(self, chat_id):
         """Show user's personal referral link and stats."""
