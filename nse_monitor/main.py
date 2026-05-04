@@ -541,7 +541,7 @@ class MarketIntelligenceSystem:
                 min_score = int(db_threshold) if db_threshold else 8
             except (TypeError, ValueError):
                 min_score = 8
-            min_score = max(1, min(10, min_score))
+            min_score = max(0, min(10, min_score))
             
             # v5.3: Institutional Policy Enforcement (Safety Floor)
             if ALERT_POLICY_MODE == "SENSITIVE_7PLUS" and min_score > 7:

@@ -269,18 +269,19 @@ class LLMProcessor:
                 {
                     "role": "system",
                     "content": (
-                        "You are a senior quantitative analyst at an Indian hedge fund. "
-                        "You MUST return ONLY valid JSON. "
-                        "Start your response EXACTLY with { and end exactly with }. "
-                        "Apply all 22 institutional rules rigorously.\n\n"
-                        "EXAMPLE OUTPUT:\n"
+                        "Senior Quant Analyst Mode. Output ONLY valid JSON.\n"
+                        "Rules:\n"
+                        "1. Start response with '{' and end with '}'. No prose.\n"
+                        "2. Strict 22-rule institutional logic.\n"
+                        "3. If news is routine/minor, score=0.\n\n"
+                        "JSON STRUCTURE:\n"
                         "{\n"
                         "  \"valid_event\": true,\n"
-                        "  \"symbol\": \"RELIANCE\",\n"
-                        "  \"trigger\": \"Reliance signs $5B JV with Disney\",\n"
-                        "  \"impact_score\": 9,\n"
-                        "  \"sentiment\": \"Bullish\",\n"
-                        "  \"summary\": \"Strategic JV confirmed.\"\n"
+                        "  \"symbol\": \"TICKER\",\n"
+                        "  \"trigger\": \"Short 1-line trigger\",\n"
+                        "  \"impact_score\": 1-10,\n"
+                        "  \"sentiment\": \"Bullish|Bearish|Neutral\",\n"
+                        "  \"summary\": \"Executive summary\"\n"
                         "}"
                     )
                 },
@@ -323,16 +324,13 @@ class LLMProcessor:
                         content_raw = message.get('content') or ''
                         reasoning = message.get('reasoning_content') or ''
                         
+                        # v1.5.1: If content is empty but reasoning has content (common in thinking models), use reasoning
                         if not content_raw.strip() and reasoning and reasoning.strip():
                             content_raw = reasoning
                         
-                        # Fix: If Sarvam model doesn't return JSON but just thinking text,
-                        # and JSON is completely missing, we need to ensure the _robust_json_parse
-                        # handles it properly. But the main issue here is the model isn't outputting
-                        # the JSON we requested. It cuts off.
-                        # Let's force it to output JSON by appending to the system prompt or using regex fallback.
+                        # Noisy warning moved to debug; regex fallback handles it
                         if "{" not in content_raw:
-                           logger.warning("No JSON brackets found in output, likely cutoff.")
+                           logger.debug("No JSON brackets found in raw output; relying on regex fallback.")
                            
                     except Exception:
                         logger.error("Sarvam response JSON missing expected keys.")
