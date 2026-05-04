@@ -48,21 +48,6 @@ from nse_monitor.watchdog import BotWatchdog
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-
-class SafeConsoleStreamHandler(logging.StreamHandler):
-    """Avoid UnicodeEncodeError on cp1252/local terminals."""
-
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            stream = self.stream
-            encoding = getattr(stream, "encoding", None) or "utf-8"
-            stream.write(msg.encode(encoding, errors="replace").decode(encoding) + self.terminator)
-            self.flush()
-        except Exception:
-            self.handleError(record)
-
-
 def ist_time(*args):
     return datetime.now(pytz.timezone("Asia/Kolkata")).timetuple()
 
@@ -75,7 +60,7 @@ _log_handler = logging.handlers.RotatingFileHandler(
 )
 _formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 _log_handler.setFormatter(_formatter)
-_console_handler = SafeConsoleStreamHandler(sys.stdout)
+_console_handler = logging.StreamHandler(sys.stdout)
 _console_handler.setFormatter(_formatter)
 logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _log_handler])
 logger = logging.getLogger("BulkbeatTV")
