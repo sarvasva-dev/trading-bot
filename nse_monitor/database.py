@@ -20,6 +20,8 @@ class Database:
             self.conn.execute("PRAGMA busy_timeout = 30000")
             # v8.0: Increased cache for 2GB VPS
             self.conn.execute("PRAGMA cache_size = -8192")
+            # Performance & Concurrency boost
+            self.conn.execute("PRAGMA journal_mode=WAL")
             # Test connection immediately
             self.conn.execute("SELECT 1")
             self._create_table()
