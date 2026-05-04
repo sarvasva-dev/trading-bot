@@ -598,7 +598,7 @@ class TelegramBot:
         if self.db:
             referrer_id = self.db.get_referred_by_id(chat_id)
             if referrer_id == "7304850675" and amount != 999:
-                 await self._send_raw(chat_id, "⚠️ <b>Selection Blocked:</b> Your referral tier is restricted to the 28-Day Institutional Pro plan.")
+                 await self._send_raw(chat_id, "⚠️ <b>Plan Not Available.</b>")
                  return
 
         # v8.0: Apply admin-controlled one-time percent discount
